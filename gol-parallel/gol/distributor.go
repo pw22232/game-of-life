@@ -27,12 +27,13 @@ func calculateAliveCells(p Params, world [][]uint8) []util.Cell {
 	for x := 0; x < p.ImageWidth; x++ {
 		for y := 0; y < p.ImageHeight; y++ {
 			if world[y][x] == 255 {
-				aliveCells = append(aliveCells, util.Cell{x, y})
+				aliveCells = append(aliveCells, util.Cell{X: x, Y: y})
 			}
 		}
 	}
 	return aliveCells
 }
+
 func calculateNextState(p Params, world [][]uint8) [][]uint8 {
 	var changeAliveCells []util.Cell
 	var changeDieCells []util.Cell
