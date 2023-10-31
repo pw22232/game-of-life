@@ -14,6 +14,7 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
+// build 接收长度和宽度并生成一个指定长度x宽度的2D矩阵
 func build(height, width int) [][]uint8 {
 	newMatrix := make([][]uint8, height)
 	for i := range newMatrix {
@@ -22,13 +23,14 @@ func build(height, width int) [][]uint8 {
 	return newMatrix
 }
 
-// makeImmutableWorld takes an existing gol world and make sure no one can change it.
+// makeImmutableWorld 将指定的世界转换为函数，转换后只能被读取，不能被修改
 func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 	return func(y, x int) uint8 {
 		return world[y][x]
 	}
 }
 
+// calculateAliveCells 计算世界中有多少个存活的细胞
 func calculateAliveCells(p Params, world [][]uint8) []util.Cell {
 	var aliveCells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
@@ -41,8 +43,10 @@ func calculateAliveCells(p Params, world [][]uint8) []util.Cell {
 	return aliveCells
 }
 
+// calculateNextState
 func calculateNextState(startY, endY int, p Params, world func(y, x int) uint8) [][]uint8 {
 	worldNextState := build(endY-startY-1, p.ImageWidth)
+	// 将要处理的world部分的数据映射到worldNextState上
 	for y := startY + 1; y < endY; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
 			worldNextState[y-startY-1][x] = world(y, x)
@@ -52,14 +56,10 @@ func calculateNextState(startY, endY int, p Params, world func(y, x int) uint8) 
 	for yIndex := startY + 1; yIndex < endY; yIndex++ {
 		for xIndex := 0; xIndex < p.ImageWidth; xIndex++ {
 			neighboursCount = countLivingNeighbour(xIndex, yIndex, world, p)
-			if world(yIndex, xIndex) == 0 {
-				if neighboursCount == 3 { // 如果该节点当前为死亡状态，并且有三个邻居，则复活该节点
-					worldNextState[yIndex-startY-1][xIndex] = 255
-				}
-			} else {
-				if neighboursCount < 2 || neighboursCount > 3 { // 存活的节点邻居少于2个或多于3个则杀死该节点
-					worldNextState[yIndex-startY-1][xIndex] = 0
-				}
+			if world(yIndex, xIndex) == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
+				worldNextState[yIndex-startY-1][xIndex] = 255
+			} else if neighboursCount < 2 || neighboursCount > 3 { // 存活的细胞邻居少于2个或多于3个时死亡
+				worldNextState[yIndex-startY-1][xIndex] = 0
 			}
 		}
 
@@ -67,7 +67,7 @@ func calculateNextState(startY, endY int, p Params, world func(y, x int) uint8) 
 	return worldNextState
 }
 
-// 判断一个节点有多少存活的邻居，会调用isAlive函数，返回存活邻居的数量
+// countLivingNeighbour 通过调用 isAlive 函数判断一个节点有多少存活的邻居，返回存活邻居的数量
 func countLivingNeighbour(x, y int, world func(y, x int) uint8, p Params) int {
 	liveNeighbour := 0
 	for line := y - 1; line < y+2; line += 2 { // 判断前一行和后一行
@@ -89,24 +89,15 @@ func countLivingNeighbour(x, y int, world func(y, x int) uint8, p Params) int {
 
 // 判断一个节点是否存活，支持超出边界的节点判断（上方超界则判断最后一行，左方超界则判断最后一列，以此类推）
 func isAlive(x, y int, world func(y, x int) uint8, p Params) bool {
-	if x < 0 {
-		x = p.ImageWidth - 1
-	}
-	if x > p.ImageWidth-1 {
-		x = 0
-	}
-	if y < 0 {
-		y = p.ImageHeight - 1
-	}
-	if y > p.ImageHeight-1 {
-		y = 0
-	}
+	x = (x + p.ImageWidth) % p.ImageWidth
+	y = (y + p.ImageHeight) % p.ImageHeight
 	if world(y, x) == 255 {
 		return true
 	}
 	return false
 }
 
+// 将任务分配到每个线程
 func worker(startY, endY int, p Params, data func(y, x int) uint8, out chan<- [][]uint8) {
 	out <- calculateNextState(startY, endY, p, data)
 }
@@ -121,6 +112,7 @@ func distributor(p Params, c distributorChannels) {
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
+	// 初始化世界，ioInput管道会每次传递一个值，从世界的左上角到右下角
 	for i := 0; i < p.ImageHeight; i++ {
 		for j := 0; j < p.ImageWidth; j++ {
 			value := <-c.ioInput
@@ -128,7 +120,9 @@ func distributor(p Params, c distributorChannels) {
 		}
 	}
 
+	// 根据需要处理的回合数量进行循环
 	for currentTurn := 0; currentTurn < p.Turns; currentTurn++ {
+		// 将世界转换为函数来防止其被意外修改
 		immutableWorld := makeImmutableWorld(world)
 		var outChannel []chan [][]uint8
 		averageHeight := p.ImageHeight / p.Threads
