@@ -43,23 +43,24 @@ func calculateAliveCells(p Params, world [][]uint8) []util.Cell {
 	return aliveCells
 }
 
-// calculateNextState
-func calculateNextState(startY, endY int, p Params, world func(y, x int) uint8) [][]uint8 {
-	worldNextState := build(endY-startY-1, p.ImageWidth)
+// calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
+func calculateNextState(startY, endY, width, height int, world func(y, x int) uint8) [][]uint8 {
+	worldNextState := build(endY-startY, width)
 	// 将要处理的world部分的数据映射到worldNextState上
-	for y := startY + 1; y < endY; y++ {
-		for x := 0; x < p.ImageWidth; x++ {
-			worldNextState[y-startY-1][x] = world(y, x)
+	for y := startY; y < endY; y++ {
+		for x := 0; x < width; x++ {
+			worldNextState[y-startY][x] = world(y, x) // worldNextState的坐标系从y=0开始
 		}
 	}
+	// 计算每个点周围的邻居并将状态写入worldNextState
 	neighboursCount := 0
-	for yIndex := startY + 1; yIndex < endY; yIndex++ {
-		for xIndex := 0; xIndex < p.ImageWidth; xIndex++ {
-			neighboursCount = countLivingNeighbour(xIndex, yIndex, world, p)
-			if world(yIndex, xIndex) == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
-				worldNextState[yIndex-startY-1][xIndex] = 255
+	for y := startY; y < endY; y++ {
+		for x := 0; x < width; x++ {
+			neighboursCount = countLivingNeighbour(x, y, width, height, world)
+			if world(y, x) == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
+				worldNextState[y-startY][x] = 255
 			} else if neighboursCount < 2 || neighboursCount > 3 { // 存活的细胞邻居少于2个或多于3个时死亡
-				worldNextState[yIndex-startY-1][xIndex] = 0
+				worldNextState[y-startY][x] = 0
 			}
 		}
 
@@ -68,30 +69,30 @@ func calculateNextState(startY, endY int, p Params, world func(y, x int) uint8) 
 }
 
 // countLivingNeighbour 通过调用 isAlive 函数判断一个节点有多少存活的邻居，返回存活邻居的数量
-func countLivingNeighbour(x, y int, world func(y, x int) uint8, p Params) int {
+func countLivingNeighbour(x, y, width, height int, world func(y, x int) uint8) int {
 	liveNeighbour := 0
 	for line := y - 1; line < y+2; line += 2 { // 判断前一行和后一行
 		for column := x - 1; column < x+2; column++ { // 判断该行3个邻居是否存活
-			if isAlive(column, line, world, p) {
+			if isAlive(column, line, width, height, world) {
 				liveNeighbour += 1
 			}
 		}
 	}
 	// 判断左右边的邻居是否存活
-	if isAlive(x-1, y, world, p) {
+	if isAlive(x-1, y, width, height, world) {
 		liveNeighbour += 1
 	}
-	if isAlive(x+1, y, world, p) {
+	if isAlive(x+1, y, width, height, world) {
 		liveNeighbour += 1
 	}
 	return liveNeighbour
 }
 
 // 判断一个节点是否存活，支持超出边界的节点判断（上方超界则判断最后一行，左方超界则判断最后一列，以此类推）
-func isAlive(x, y int, world func(y, x int) uint8, p Params) bool {
-	x = (x + p.ImageWidth) % p.ImageWidth
-	y = (y + p.ImageHeight) % p.ImageHeight
-	if world(y, x) == 255 {
+func isAlive(x, y, width, height int, world func(y, x int) uint8) bool {
+	x = (x + width) % width
+	y = (y + height) % height
+	if world(y, x) != 0 {
 		return true
 	}
 	return false
@@ -99,7 +100,7 @@ func isAlive(x, y int, world func(y, x int) uint8, p Params) bool {
 
 // 将任务分配到每个线程
 func worker(startY, endY int, p Params, data func(y, x int) uint8, out chan<- [][]uint8) {
-	out <- calculateNextState(startY, endY, p, data)
+	out <- calculateNextState(startY, endY, p.ImageWidth, p.ImageHeight, data)
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -136,7 +137,7 @@ func distributor(p Params, c distributorChannels) {
 			}
 			channel := make(chan [][]uint8)
 			outChannel = append(outChannel, channel)
-			go worker(currentHeight-1, currentHeight+size, p, immutableWorld, channel)
+			go worker(currentHeight, currentHeight+size, p, immutableWorld, channel)
 			currentHeight += size
 		}
 
