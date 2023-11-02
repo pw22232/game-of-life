@@ -1,6 +1,7 @@
 package gol
 
 import (
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -58,7 +59,7 @@ func countAliveCells(p Params, immutableWord func(y, x int) uint8) int {
 }
 
 // calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
-func calculateNextState(startY, endY, width, height int, immutableWorld func(y, x int) uint8) [][]uint8 {
+func calculateNextState(startY, endY, width, height int, immutableWorld func(y, x int) uint8, events chan<- Event) [][]uint8 {
 	worldNextState := build(endY-startY, width)
 	// 将要处理的world部分的数据映射到worldNextState上
 	for y := startY; y < endY; y++ {
@@ -73,8 +74,10 @@ func calculateNextState(startY, endY, width, height int, immutableWorld func(y, 
 			neighboursCount = countLivingNeighbour(x, y, width, height, immutableWorld)
 			if immutableWorld(y, x) == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
 				worldNextState[y-startY][x] = 255
-			} else if neighboursCount < 2 || neighboursCount > 3 { // 存活的细胞邻居少于2个或多于3个时死亡
+				events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
+			} else if immutableWorld(y, x) == 255 && (neighboursCount < 2 || neighboursCount > 3) { // 存活的细胞邻居少于2个或多于3个时死亡
 				worldNextState[y-startY][x] = 0
+				events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
 			}
 		}
 
@@ -112,42 +115,92 @@ func isAlive(x, y, width, height int, immutableWorld func(y, x int) uint8) bool 
 	return false
 }
 
-// 将任务分配到每个线程
-func worker(startY, endY int, p Params, immutableWorld func(y, x int) uint8, out chan<- [][]uint8) {
-	out <- calculateNextState(startY, endY, p.ImageWidth, p.ImageHeight, immutableWorld)
+func outputPGM(c distributorChannels, p Params, turn int, immutableWorld func(y, x int) uint8, processLock *sync.Mutex) {
+	c.ioCommand <- ioOutput
+	processLock.Lock()
+	outFilename := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(turn)
+	c.ioFilename <- outFilename
+	// 输出世界，ioOutput通道会每次传递一个值，从世界的左上角到右下角
+
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			c.ioOutput <- immutableWorld(y, x)
+		}
+	}
+	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outFilename}
+	processLock.Unlock()
 }
 
-func timer(ticker *time.Ticker, events chan<- Event, worldLock *sync.Mutex, turn *int, p Params, immutableWorld *func(y, x int) uint8) {
+// 将任务分配到每个线程
+func worker(startY, endY int, p Params, immutableWorld func(y, x int) uint8, events chan<- Event, out chan<- [][]uint8) {
+	out <- calculateNextState(startY, endY, p.ImageWidth, p.ImageHeight, immutableWorld, events)
+}
+
+func timer(ticker *time.Ticker, events chan<- Event, processLock *sync.Mutex, turn *int, p Params, immutableWorld *func(y, x int) uint8) {
 	for {
 		<-ticker.C
-		worldLock.Lock()
+		processLock.Lock()
 		events <- AliveCellsCount{CompletedTurns: *turn, CellsCount: countAliveCells(p, *immutableWorld)}
-		worldLock.Unlock()
+		processLock.Unlock()
+	}
+}
+
+func controller(keyPresses <-chan rune, c distributorChannels, processLock *sync.Mutex, turn *int, p Params, immutableWorld func(y, x int) uint8) {
+	var key rune
+	for {
+		key = <-keyPresses
+		if key == 'q' {
+			outputPGM(c, p, *turn, immutableWorld, processLock)
+			processLock.Lock()
+			c.events <- StateChange{*turn, Quitting}
+			c.ioCommand <- ioCheckIdle
+			<-c.ioIdle
+			os.Exit(0)
+		} else if key == 'p' {
+			processLock.Lock()
+			c.events <- StateChange{CompletedTurns: *turn, NewState: Paused}
+			paused := true
+			for paused {
+				key = <-keyPresses
+				if key == 'p' {
+					paused = false
+					processLock.Unlock()
+					c.events <- StateChange{CompletedTurns: *turn, NewState: Executing}
+				}
+			}
+		} else if key == 's' {
+			outputPGM(c, p, *turn, immutableWorld, processLock)
+		}
 	}
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
-func distributor(p Params, c distributorChannels) {
-	var readLock sync.Mutex
-
-	// TODO: Create a 2D slice to store the world.
+func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := build(p.ImageHeight, p.ImageWidth)
 
 	turn := 0
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
+	var processLock sync.Mutex
+	processLock.Lock()
 	// 初始化世界，ioInput管道会每次传递一个值，从世界的左上角到右下角
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
 			value := <-c.ioInput
 			world[y][x] = value
+			if value == 255 {
+				c.events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
+			}
 		}
 	}
+	processLock.Unlock()
+	c.events <- TurnComplete{CompletedTurns: 0}
 
 	immutableWorld := makeImmutableWorld(world)
+	go controller(keyPresses, c, &processLock, &turn, p, immutableWorld)
 	ticker := time.NewTicker(2 * time.Second)
-	go timer(ticker, c.events, &readLock, &turn, p, &immutableWorld)
+	go timer(ticker, c.events, &processLock, &turn, p, &immutableWorld)
 	// 根据需要处理的回合数量进行循环
 	for turn = 0; turn < p.Turns; {
 		var outChannel []chan [][]uint8
@@ -163,7 +216,7 @@ func distributor(p Params, c distributorChannels) {
 			}
 			channel := make(chan [][]uint8)
 			outChannel = append(outChannel, channel)
-			go worker(currentHeight, currentHeight+size, p, immutableWorld, channel)
+			go worker(currentHeight, currentHeight+size, p, immutableWorld, c.events, channel)
 			currentHeight += size
 		}
 
@@ -177,13 +230,13 @@ func distributor(p Params, c distributorChannels) {
 			}
 			currentLineIndex += len(worldPart)
 		}
-		readLock.Lock()
+		processLock.Lock()
 		turn++
 		world = newWorld
 		c.events <- TurnComplete{CompletedTurns: turn}
 		// 将世界转换为函数来防止其被意外修改
 		immutableWorld = makeImmutableWorld(world)
-		readLock.Unlock()
+		processLock.Unlock()
 	}
 
 	// TODO: Execute all turns of the Game of Life.
@@ -191,16 +244,7 @@ func distributor(p Params, c distributorChannels) {
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 
 	ticker.Stop()
-	c.ioCommand <- ioOutput
-	outFilename := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(turn)
-	c.ioFilename <- outFilename
-	// 输出世界，ioOutput通道会每次传递一个值，从世界的左上角到右下角
-	for y := 0; y < p.ImageHeight; y++ {
-		for x := 0; x < p.ImageWidth; x++ {
-			c.ioOutput <- immutableWorld(y, x)
-		}
-	}
-	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outFilename}
+	outputPGM(c, p, turn, immutableWorld, &processLock)
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
