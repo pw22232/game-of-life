@@ -138,10 +138,10 @@ func distributor(p Params, c distributorChannels) {
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
 	// 初始化世界，ioInput管道会每次传递一个值，从世界的左上角到右下角
-	for i := 0; i < p.ImageHeight; i++ {
-		for j := 0; j < p.ImageWidth; j++ {
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
 			value := <-c.ioInput
-			world[i][j] = value
+			world[y][x] = value
 		}
 	}
 
@@ -190,11 +190,22 @@ func distributor(p Params, c distributorChannels) {
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 
+	ticker.Stop()
+	c.ioCommand <- ioOutput
+	outFilename := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(turn)
+	c.ioFilename <- outFilename
+	// 输出世界，ioOutput通道会每次传递一个值，从世界的左上角到右下角
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			c.ioOutput <- immutableWorld(y, x)
+		}
+	}
+	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outFilename}
+
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
 
-	ticker.Stop()
 	c.events <- StateChange{turn, Quitting}
 	c.events <- FinalTurnComplete{turn, findAliveCells(p, world)}
 
