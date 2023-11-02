@@ -128,7 +128,7 @@ func timer(ticker *time.Ticker, events chan<- Event, worldLock *sync.Mutex, turn
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
-	var worldLock sync.Mutex
+	var readLock sync.Mutex
 
 	// TODO: Create a 2D slice to store the world.
 	world := build(p.ImageHeight, p.ImageWidth)
@@ -146,12 +146,10 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	immutableWorld := makeImmutableWorld(world)
-	ticker := time.NewTicker(1 * time.Second)
-	go timer(ticker, c.events, &worldLock, &turn, p, &immutableWorld)
+	ticker := time.NewTicker(2 * time.Second)
+	go timer(ticker, c.events, &readLock, &turn, p, &immutableWorld)
 	// 根据需要处理的回合数量进行循环
 	for turn = 0; turn < p.Turns; {
-		// 将世界转换为函数来防止其被意外修改
-		immutableWorld = makeImmutableWorld(world)
 		var outChannel []chan [][]uint8
 		averageHeight := p.ImageHeight / p.Threads
 		restHeight := p.ImageHeight % p.Threads
@@ -179,11 +177,13 @@ func distributor(p Params, c distributorChannels) {
 			}
 			currentLineIndex += len(worldPart)
 		}
-		worldLock.Lock()
+		readLock.Lock()
+		turn++
 		world = newWorld
 		c.events <- TurnComplete{CompletedTurns: turn}
-		turn++
-		worldLock.Unlock()
+		// 将世界转换为函数来防止其被意外修改
+		immutableWorld = makeImmutableWorld(world)
+		readLock.Unlock()
 	}
 
 	// TODO: Execute all turns of the Game of Life.
