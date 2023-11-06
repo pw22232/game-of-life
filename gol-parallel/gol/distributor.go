@@ -34,11 +34,11 @@ func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 }
 
 // findAliveCells 返回世界中所有存活的细胞
-func findAliveCells(p Params, world [][]uint8) []util.Cell {
+func findAliveCells(p Params, immutableWorld func(y, x int) uint8) []util.Cell {
 	var aliveCells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
 		for y := 0; y < p.ImageHeight; y++ {
-			if world[y][x] == 255 {
+			if immutableWorld(y, x) == 255 {
 				aliveCells = append(aliveCells, util.Cell{X: x, Y: y})
 			}
 		}
@@ -46,11 +46,12 @@ func findAliveCells(p Params, world [][]uint8) []util.Cell {
 	return aliveCells
 }
 
-func countAliveCells(p Params, immutableWord func(y, x int) uint8) int {
+// countAliveCells 返回世界中存活细胞的数量
+func countAliveCells(p Params, immutableWorld func(y, x int) uint8) int {
 	aliveCellsCount := 0
 	for x := 0; x < p.ImageWidth; x++ {
 		for y := 0; y < p.ImageHeight; y++ {
-			if immutableWord(y, x) == 255 {
+			if immutableWorld(y, x) == 255 {
 				aliveCellsCount++
 			}
 		}
@@ -164,8 +165,8 @@ func controller(keyPresses <-chan rune, c distributorChannels, processLock *sync
 				key = <-keyPresses
 				if key == 'p' {
 					paused = false
-					processLock.Unlock()
 					c.events <- StateChange{CompletedTurns: *turn, NewState: Executing}
+					processLock.Unlock()
 				}
 			}
 		} else if key == 's' {
@@ -251,7 +252,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	<-c.ioIdle
 
 	c.events <- StateChange{turn, Quitting}
-	c.events <- FinalTurnComplete{turn, findAliveCells(p, world)}
+	c.events <- FinalTurnComplete{turn, findAliveCells(p, immutableWorld)}
 
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
