@@ -1,7 +1,6 @@
 package gol
 
 import (
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -137,44 +136,6 @@ func worker(startY, endY int, p Params, immutableWorld func(y, x int) uint8, eve
 	out <- calculateNextState(startY, endY, p.ImageWidth, p.ImageHeight, immutableWorld, events)
 }
 
-func timer(ticker *time.Ticker, events chan<- Event, processLock *sync.Mutex, turn *int, p Params, immutableWorld *func(y, x int) uint8) {
-	for {
-		<-ticker.C
-		processLock.Lock()
-		events <- AliveCellsCount{CompletedTurns: *turn, CellsCount: countAliveCells(p, *immutableWorld)}
-		processLock.Unlock()
-	}
-}
-
-func controller(keyPresses <-chan rune, c distributorChannels, processLock *sync.Mutex, turn *int, p Params, immutableWorld func(y, x int) uint8) {
-	var key rune
-	for {
-		key = <-keyPresses
-		if key == 'q' {
-			outputPGM(c, p, *turn, immutableWorld, processLock)
-			processLock.Lock()
-			c.events <- StateChange{*turn, Quitting}
-			c.ioCommand <- ioCheckIdle
-			<-c.ioIdle
-			os.Exit(0)
-		} else if key == 'p' {
-			processLock.Lock()
-			c.events <- StateChange{CompletedTurns: *turn, NewState: Paused}
-			paused := true
-			for paused {
-				key = <-keyPresses
-				if key == 'p' {
-					paused = false
-					c.events <- StateChange{CompletedTurns: *turn, NewState: Executing}
-					processLock.Unlock()
-				}
-			}
-		} else if key == 's' {
-			outputPGM(c, p, *turn, immutableWorld, processLock)
-		}
-	}
-}
-
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := build(p.ImageHeight, p.ImageWidth)
@@ -184,7 +145,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
 	var processLock sync.Mutex
-	processLock.Lock()
 	// 初始化世界，ioInput管道会每次传递一个值，从世界的左上角到右下角
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
@@ -195,15 +155,52 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			}
 		}
 	}
-	processLock.Unlock()
 	c.events <- TurnComplete{CompletedTurns: 0}
 
 	immutableWorld := makeImmutableWorld(world)
-	go controller(keyPresses, c, &processLock, &turn, p, immutableWorld)
+	terminated := false
+
+	// ticker子线程，每两秒报告一次AliveCellsCount
 	ticker := time.NewTicker(2 * time.Second)
-	go timer(ticker, c.events, &processLock, &turn, p, &immutableWorld)
+	go func() {
+		for {
+			<-ticker.C
+			processLock.Lock()
+			c.events <- AliveCellsCount{CompletedTurns: turn, CellsCount: countAliveCells(p, immutableWorld)}
+			processLock.Unlock()
+		}
+	}()
+
+	// keyboard controller子线程，当键盘输入指定按键时做出响应
+	go func() {
+		var key rune
+		for {
+			key = <-keyPresses
+			if key == 'q' {
+				outputPGM(c, p, turn, immutableWorld, &processLock)
+				terminated = true
+			} else if key == 'p' {
+				processLock.Lock()
+				ticker.Stop() // 暂停ticker计时，以防止恢复运行时ticker子线程输出两次内容
+				c.events <- StateChange{CompletedTurns: turn, NewState: Paused}
+				paused := true
+				for paused {
+					key = <-keyPresses
+					if key == 'p' {
+						paused = false
+						c.events <- StateChange{CompletedTurns: turn, NewState: Executing}
+						processLock.Unlock()
+						ticker.Reset(2 * time.Second) // 重新开始ticker计时
+					}
+				}
+			} else if key == 's' {
+				outputPGM(c, p, turn, immutableWorld, &processLock)
+			}
+		}
+	}()
+
 	// 根据需要处理的回合数量进行循环
-	for turn = 0; turn < p.Turns; {
+	for turn = 0; turn < p.Turns && !terminated; {
 		var outChannel []chan [][]uint8
 		averageHeight := p.ImageHeight / p.Threads
 		restHeight := p.ImageHeight % p.Threads
