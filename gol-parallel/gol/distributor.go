@@ -1,6 +1,7 @@
 package gol
 
 import (
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -158,7 +159,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.events <- TurnComplete{CompletedTurns: 0}
 
 	immutableWorld := makeImmutableWorld(world)
-	terminated := false
 
 	// ticker子线程，每两秒报告一次AliveCellsCount
 	ticker := time.NewTicker(2 * time.Second)
@@ -178,7 +178,10 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			key = <-keyPresses
 			if key == 'q' {
 				outputPGM(c, p, turn, immutableWorld, &processLock)
-				terminated = true
+				c.ioCommand <- ioCheckIdle
+				<-c.ioIdle
+				c.events <- StateChange{turn, Quitting}
+				os.Exit(0)
 			} else if key == 'p' {
 				processLock.Lock()
 				ticker.Stop() // 暂停ticker计时，以防止恢复运行时ticker子线程输出两次内容
@@ -200,7 +203,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	}()
 
 	// 根据需要处理的回合数量进行循环
-	for turn = 0; turn < p.Turns && !terminated; {
+	for turn = 0; turn < p.Turns; {
 		var outChannel []chan [][]uint8
 		averageHeight := p.ImageHeight / p.Threads
 		restHeight := p.ImageHeight % p.Threads
