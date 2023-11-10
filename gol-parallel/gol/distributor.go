@@ -1,7 +1,6 @@
 package gol
 
 import (
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -106,7 +105,7 @@ func countLivingNeighbour(x, y, width, height int, immutableWorld func(y, x int)
 	return liveNeighbour
 }
 
-// 判断一个节点是否存活，支持超出边界的节点判断（上方超界则判断最后一行，左方超界则判断最后一列，以此类推）
+// isAlive 判断一个节点是否存活，支持超出边界的节点判断（上方超界则判断最后一行，左方超界则判断最后一列，以此类推）
 func isAlive(x, y, width, height int, immutableWorld func(y, x int) uint8) bool {
 	x = (x + width) % width
 	y = (y + height) % height
@@ -116,20 +115,22 @@ func isAlive(x, y, width, height int, immutableWorld func(y, x int) uint8) bool 
 	return false
 }
 
-func outputPGM(c distributorChannels, p Params, turn int, immutableWorld func(y, x int) uint8, processLock *sync.Mutex) {
+// outputPGM 将世界转换为pgm图像
+func outputPGM(c distributorChannels, p Params, turn int, world [][]uint8) {
 	c.ioCommand <- ioOutput
-	processLock.Lock()
 	outFilename := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(turn)
 	c.ioFilename <- outFilename
 	// 输出世界，ioOutput通道会每次传递一个值，从世界的左上角到右下角
 
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
-			c.ioOutput <- immutableWorld(y, x)
+			c.ioOutput <- world[y][x]
 		}
 	}
+
+	c.ioCommand <- ioCheckIdle
+	<-c.ioIdle
 	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outFilename}
-	processLock.Unlock()
 }
 
 // 将任务分配到每个线程
@@ -156,7 +157,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			}
 		}
 	}
-	c.events <- TurnComplete{CompletedTurns: 0}
 
 	immutableWorld := makeImmutableWorld(world)
 
@@ -171,40 +171,41 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		}
 	}()
 
+	// quit线程在键盘按q时提示distributor停止处理回合并退出
+	quit := make(chan bool)
+	isForceQuit := false
 	// keyboard controller子线程，当键盘输入指定按键时做出响应
 	go func() {
 		var key rune
 		for {
 			key = <-keyPresses
 			if key == 'q' {
-				outputPGM(c, p, turn, immutableWorld, &processLock)
-				c.ioCommand <- ioCheckIdle
-				<-c.ioIdle
-				c.events <- StateChange{turn, Quitting}
-				os.Exit(0)
+				quit <- true
 			} else if key == 'p' {
 				processLock.Lock()
-				ticker.Stop() // 暂停ticker计时，以防止恢复运行时ticker子线程输出两次内容
 				c.events <- StateChange{CompletedTurns: turn, NewState: Paused}
+				ticker.Stop()
 				paused := true
 				for paused {
 					key = <-keyPresses
 					if key == 'p' {
+						ticker.Reset(2 * time.Second) // 重新开始ticker计时
 						paused = false
 						c.events <- StateChange{CompletedTurns: turn, NewState: Executing}
 						processLock.Unlock()
-						ticker.Reset(2 * time.Second) // 重新开始ticker计时
 					}
 				}
 			} else if key == 's' {
-				outputPGM(c, p, turn, immutableWorld, &processLock)
+				processLock.Lock()
+				go outputPGM(c, p, turn, world)
+				processLock.Unlock()
 			}
 		}
 	}()
 
 	// 根据需要处理的回合数量进行循环
-	for turn = 0; turn < p.Turns; {
-		var outChannel []chan [][]uint8
+	for turn = 0; turn < p.Turns && !isForceQuit; {
+		var outChannels []chan [][]uint8
 		averageHeight := p.ImageHeight / p.Threads
 		restHeight := p.ImageHeight % p.Threads
 		currentHeight := 0
@@ -215,9 +216,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			if i < restHeight {
 				size += 1
 			}
-			channel := make(chan [][]uint8)
-			outChannel = append(outChannel, channel)
-			go worker(currentHeight, currentHeight+size, p, immutableWorld, c.events, channel)
+			outChannel := make(chan [][]uint8)
+			outChannels = append(outChannels, outChannel)
+			go worker(currentHeight, currentHeight+size, p, immutableWorld, c.events, outChannel)
 			currentHeight += size
 		}
 
@@ -225,7 +226,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		var worldPart [][]uint8
 		var newWorld [][]uint8
 		for i := 0; i < p.Threads; i++ {
-			worldPart = <-outChannel[i]
+			worldPart = <-outChannels[i]
 			for _, linePart := range worldPart {
 				newWorld = append(newWorld, linePart)
 			}
@@ -234,25 +235,29 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		processLock.Lock()
 		turn++
 		world = newWorld
-		c.events <- TurnComplete{CompletedTurns: turn}
 		// 将世界转换为函数来防止其被意外修改
 		immutableWorld = makeImmutableWorld(world)
+		c.events <- TurnComplete{CompletedTurns: turn}
 		processLock.Unlock()
+		select {
+		case <-quit:
+			isForceQuit = true
+		default:
+			break
+		}
 	}
 
-	// TODO: Execute all turns of the Game of Life.
-
-	// TODO: Report the final state using FinalTurnCompleteEvent.
-
 	ticker.Stop()
-	outputPGM(c, p, turn, immutableWorld, &processLock)
+	outputPGM(c, p, turn, world)
+	if !isForceQuit {
+		c.events <- FinalTurnComplete{turn, findAliveCells(p, immutableWorld)}
+	}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
 
 	c.events <- StateChange{turn, Quitting}
-	c.events <- FinalTurnComplete{turn, findAliveCells(p, immutableWorld)}
 
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
