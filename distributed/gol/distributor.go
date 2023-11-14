@@ -5,9 +5,8 @@ import (
 	"net/rpc"
 	"os"
 	"strconv"
-	"time"
-
 	"uk.ac.bris.cs/gameoflife/stubs"
+	"uk.ac.bris.cs/gameoflife/util"
 )
 
 type distributorChannels struct {
@@ -39,6 +38,19 @@ func build(height, width int) [][]uint8 {
 	return newMatrix
 }
 
+// findAliveCells 返回世界中所有存活的细胞
+func findAliveCells(p Params, world [][]uint8) []util.Cell {
+	var aliveCells []util.Cell
+	for x := 0; x < p.ImageWidth; x++ {
+		for y := 0; y < p.ImageHeight; y++ {
+			if world[y][x] == 255 {
+				aliveCells = append(aliveCells, util.Cell{X: x, Y: y})
+			}
+		}
+	}
+	return aliveCells
+}
+
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
 	server, err := rpc.Dial("tcp", "localhost:8080")
@@ -57,15 +69,18 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	golBoard := stubs.GolBoard{World: world, Width: p.ImageWidth, Height: p.ImageHeight}
+	req := stubs.NextStateRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
 	var res stubs.NextStateResponse
+	finish := make(chan bool)
 	go func() {
 		err = server.Call("Server.RunGol", req, &res)
 		dialError(err, c)
-		fmt.Println(res.GolBoard)
+		finish <- true
 	}()
 
-	time.Sleep(30 * time.Second)
+	<-finish
 	// TODO: Report the final state using FinalTurnCompleteEvent.
+	c.events <- FinalTurnComplete{res.GolBoard.CurrentTurn, findAliveCells(p, res.GolBoard.World)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
