@@ -1,19 +1,18 @@
 package stubs
 
-import "uk.ac.bris.cs/gameoflife/gol"
-
-type golBoard struct {
-	World  [][]uint8
-	Turn   int
-	Width  int
-	Height int
+type GolBoard struct {
+	World       [][]uint8
+	CurrentTurn int
+	Width       int
+	Height      int
 }
 
-type nextStateRequest struct {
-	GolBoard golBoard
-	p        gol.Params
+type NextStateRequest struct {
+	GolBoard GolBoard
+	Threads  int
+	Turns    int
 }
 
-type nextStateResponse struct {
-	golBoard golBoard
+type NextStateResponse struct {
+	GolBoard GolBoard
 }
