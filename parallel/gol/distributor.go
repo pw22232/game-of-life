@@ -222,7 +222,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			currentHeight += size
 		}
 
-		currentLineIndex := 0
 		var worldPart [][]uint8
 		var newWorld [][]uint8
 		for i := 0; i < p.Threads; i++ {
@@ -230,7 +229,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			for _, linePart := range worldPart {
 				newWorld = append(newWorld, linePart)
 			}
-			currentLineIndex += len(worldPart)
 		}
 		processLock.Lock()
 		turn++

@@ -72,6 +72,7 @@ func distributor(p Params, c distributorChannels) {
 	req := stubs.NextStateRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
 	var res stubs.NextStateResponse
 	finish := make(chan bool)
+
 	go func() {
 		err = server.Call("Server.RunGol", req, &res)
 		dialError(err, c)
@@ -79,6 +80,7 @@ func distributor(p Params, c distributorChannels) {
 	}()
 
 	<-finish
+	//fmt.Println(res.GolBoard.World)
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{res.GolBoard.CurrentTurn, findAliveCells(p, res.GolBoard.World)}
 

@@ -27,16 +27,16 @@ func acceptConns(ln net.Listener, conns chan net.Conn) {
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
-func (s *Server) RunGol(req stubs.NextStateRequest, res stubs.NextStateResponse) (err error) {
+func (s *Server) RunGol(req stubs.NextStateRequest, res *stubs.NextStateResponse) (err error) {
 	// 根据需要处理的回合数量进行循环
 	world := req.GolBoard.World
 	turn := 0
+	averageHeight := req.GolBoard.Height / req.Threads
+	restHeight := req.GolBoard.Height % req.Threads
+	size := averageHeight
 	for turn = 0; turn < req.Turns; turn++ {
 		var outChannels []chan [][]uint8
-		averageHeight := req.GolBoard.Height / req.Turns
-		restHeight := req.GolBoard.Height % req.Threads
 		currentHeight := 0
-		size := averageHeight
 		for i := 0; i < req.Threads; i++ {
 			size = averageHeight
 			// 将除不尽的部分分配到前几个threads中，每个threads一行
@@ -50,7 +50,6 @@ func (s *Server) RunGol(req stubs.NextStateRequest, res stubs.NextStateResponse)
 			currentHeight += size
 		}
 
-		currentLineIndex := 0
 		var worldPart [][]uint8
 		var newWorld [][]uint8
 		for i := 0; i < req.Threads; i++ {
@@ -58,7 +57,6 @@ func (s *Server) RunGol(req stubs.NextStateRequest, res stubs.NextStateResponse)
 			for _, linePart := range worldPart {
 				newWorld = append(newWorld, linePart)
 			}
-			currentLineIndex += len(worldPart)
 		}
 		world = newWorld
 		/*	processLock.Lock()
@@ -98,6 +96,7 @@ func main() {
 	defer ln.Close()
 	go acceptConns(ln, conns)
 	rpc.Register(new(Server))
+	fmt.Println("Server Start, Listening on 8080")
 	rpc.Accept(ln)
 
 }
