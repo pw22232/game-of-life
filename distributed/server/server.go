@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/rpc"
 	"uk.ac.bris.cs/gameoflife/stubs"
 )
 
@@ -44,5 +45,7 @@ func main() {
 	}
 	defer ln.Close()
 	go acceptConns(ln, conns)
+	rpc.Register(new(Server))
+	rpc.Accept(ln)
 
 }
