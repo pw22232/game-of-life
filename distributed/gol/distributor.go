@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"net/rpc"
 	"os"
+	"strconv"
+	"time"
+
 	"uk.ac.bris.cs/gameoflife/stubs"
 )
 
@@ -27,19 +30,41 @@ func dialError(err error, c distributorChannels) {
 	}
 }
 
+// build 接收长度和宽度并生成一个指定长度x宽度的2D矩阵
+func build(height, width int) [][]uint8 {
+	newMatrix := make([][]uint8, height)
+	for i := range newMatrix {
+		newMatrix[i] = make([]uint8, width)
+	}
+	return newMatrix
+}
+
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
 	server, err := rpc.Dial("tcp", "localhost:8080")
 	dialError(err, c)
 
-	res := stubs.TestRes{}
-	err = server.Call("Server.Test", stubs.TestReq{Value: 3}, &res)
-	dialError(err, c)
-	fmt.Println(res.Value)
 	turn := 0
+	c.ioCommand <- ioInput
+	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
-	// TODO: Execute all turns of the Game of Life.
+	world := build(p.ImageHeight, p.ImageWidth)
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			value := <-c.ioInput
+			world[y][x] = value
+		}
+	}
 
+	golBoard := stubs.GolBoard{World: world, Width: p.ImageWidth, Height: p.ImageHeight}
+	var res stubs.NextStateResponse
+	go func() {
+		err = server.Call("Server.RunGol", req, &res)
+		dialError(err, c)
+		fmt.Println(res.GolBoard)
+	}()
+
+	time.Sleep(30 * time.Second)
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 
 	// Make sure that the Io has finished any output before exiting.
