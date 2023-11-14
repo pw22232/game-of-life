@@ -33,7 +33,7 @@ func distributor(p Params, c distributorChannels) {
 	dialError(err, c)
 
 	res := stubs.TestRes{}
-	err = server.Call("Test", stubs.TestReq{Value: 1}, &res)
+	err = server.Call("Server.Test", stubs.TestReq{Value: 3}, &res)
 	dialError(err, c)
 	fmt.Println(res.Value)
 	turn := 0
