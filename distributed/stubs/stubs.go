@@ -1,9 +1,8 @@
 package stubs
 
-type TestReq struct {
-	Value int
-}
-
-type TestRes struct {
-	Value int
+type golBoard struct {
+	World  [][]uint8
+	Turn   int
+	Width  int
+	Height int
 }
