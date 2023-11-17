@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
 	"uk.ac.bris.cs/gameoflife/gol"
 )
 
 const benchLength = 1000
 
-func BenchmarkGol(b *testing.B) {
+func BenchmarkStudentVersion(b *testing.B) {
 	for threads := 1; threads <= 16; threads++ {
 		os.Stdout = nil // Disable all program output apart from benchmark results
 		p := gol.Params{
@@ -24,7 +25,6 @@ func BenchmarkGol(b *testing.B) {
 				events := make(chan gol.Event)
 				go gol.Run(p, events, nil)
 				for range events {
-
 				}
 			}
 		})
