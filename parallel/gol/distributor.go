@@ -17,6 +17,7 @@ type distributorChannels struct {
 }
 
 // build 接收长度和宽度并生成一个指定长度x宽度的2D矩阵
+// Receives the length and width and generates a 2D matrix of the specified length x width
 func build(height, width int) [][]uint8 {
 	newMatrix := make([][]uint8, height)
 	for i := range newMatrix {
@@ -26,6 +27,7 @@ func build(height, width int) [][]uint8 {
 }
 
 // makeImmutableWorld 将指定的世界转换为函数，转换后只能被读取，不能被修改
+// Converts the specified world to a function, which can only be read after conversion and cannot be modified.
 func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 	return func(y, x int) uint8 {
 		return world[y][x]
@@ -33,6 +35,7 @@ func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 }
 
 // findAliveCells 返回世界中所有存活的细胞
+// return all alive cells in the world
 func findAliveCells(p Params, immutableWorld func(y, x int) uint8) []util.Cell {
 	var aliveCells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
@@ -46,6 +49,7 @@ func findAliveCells(p Params, immutableWorld func(y, x int) uint8) []util.Cell {
 }
 
 // countAliveCells 返回世界中存活细胞的数量
+// return the count of all alive cells in world
 func countAliveCells(p Params, immutableWorld func(y, x int) uint8) int {
 	aliveCellsCount := 0
 	for x := 0; x < p.ImageWidth; x++ {
@@ -59,23 +63,28 @@ func countAliveCells(p Params, immutableWorld func(y, x int) uint8) int {
 }
 
 // calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
+// will compute the next state of the world starting with column startY and ending with column endY-1
 func calculateNextState(startY, endY, width, height int, immutableWorld func(y, x int) uint8, events chan<- Event) [][]uint8 {
 	worldNextState := build(endY-startY, width)
 	// 将要处理的world部分的数据映射到worldNextState上
+	//Map the data of the world part to be processed to worldNextState
 	for y := startY; y < endY; y++ {
 		for x := 0; x < width; x++ {
 			worldNextState[y-startY][x] = immutableWorld(y, x) // worldNextState的坐标系从y=0开始
 		}
 	}
 	// 计算每个点周围的邻居并将状态写入worldNextState
+	//calculate the state of each point's neighbours, and write in worldNextState
 	neighboursCount := 0
 	for y := startY; y < endY; y++ {
 		for x := 0; x < width; x++ {
 			neighboursCount = countLivingNeighbour(x, y, width, height, immutableWorld)
 			if immutableWorld(y, x) == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
+				// Resurrection of dead cells when they have exactly 3 neighbours
 				worldNextState[y-startY][x] = 255
 				events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
 			} else if immutableWorld(y, x) == 255 && (neighboursCount < 2 || neighboursCount > 3) { // 存活的细胞邻居少于2个或多于3个时死亡
+				//Surviving cell die when there are fewer than two or more than three neighbours.
 				worldNextState[y-startY][x] = 0
 				events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
 			}
@@ -86,6 +95,8 @@ func calculateNextState(startY, endY, width, height int, immutableWorld func(y, 
 }
 
 // countLivingNeighbour 通过调用 isAlive 函数判断一个节点有多少存活的邻居，返回存活邻居的数量
+// Determine how many living neighbours a node has by calling the isAlive function,
+// //which returns the number of living neighbours
 func countLivingNeighbour(x, y, width, height int, immutableWorld func(y, x int) uint8) int {
 	liveNeighbour := 0
 	for line := y - 1; line < y+2; line += 2 { // 判断前一行和后一行
