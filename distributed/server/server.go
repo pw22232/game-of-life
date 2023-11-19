@@ -5,35 +5,50 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+	"os"
+	"sync"
 	"uk.ac.bris.cs/gameoflife/stubs"
 )
 
 type Server struct {
+	world       [][]uint8
+	worldWidth  int
+	worldHeight int
+	currentTurn int
+	working     bool
+	paused      bool
+	processLock sync.Mutex
+	quit        chan bool
 }
 
 func handleError(err error) {
 	fmt.Println("Error:", err)
 }
 
-func acceptConns(ln net.Listener, conns chan net.Conn) {
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			handleError(err)
-			return
-		}
-		conns <- conn
+// RunGol distributor divides the work between workers and interacts with other goroutines.
+func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err error) {
+	// 结束服务器当前的Gol并开始新的Gol
+	if s.paused {
+		s.processLock.Unlock()
 	}
-}
-
-// distributor divides the work between workers and interacts with other goroutines.
-func (s *Server) RunGol(req stubs.NextStateRequest, res *stubs.NextStateResponse) (err error) {
+	if s.working {
+		s.quit <- true
+	}
+	s.working = true
+	s.quit = make(chan bool)
 	// 根据需要处理的回合数量进行循环
 	world := req.GolBoard.World
 	turn := 0
+	s.processLock.Lock()
+	s.currentTurn = 0
+	s.world = req.GolBoard.World
+	s.worldHeight = req.GolBoard.Height
+	s.worldWidth = req.GolBoard.Width
+	s.processLock.Unlock()
 	averageHeight := req.GolBoard.Height / req.Threads
 	restHeight := req.GolBoard.Height % req.Threads
 	size := averageHeight
+
 	for turn = 0; turn < req.Turns; turn++ {
 		var outChannels []chan [][]uint8
 		currentHeight := 0
@@ -58,21 +73,61 @@ func (s *Server) RunGol(req stubs.NextStateRequest, res *stubs.NextStateResponse
 				newWorld = append(newWorld, linePart)
 			}
 		}
+		s.processLock.Lock()
 		world = newWorld
-		/*	processLock.Lock()
-			turn++
-			// 将世界转换为函数来防止其被意外修改
-			immutableWorld = makeImmutableWorld(world)
-			c.events <- TurnComplete{CompletedTurns: turn}
-			processLock.Unlock()
-			select {
-			case <-quit:
-				isForceQuit = true
-			default:
-				break
-			}*/
+		s.world = newWorld
+		s.currentTurn = turn + 1
+		s.processLock.Unlock()
+		select {
+		case <-s.quit:
+			return
+		default:
+			break
+		}
 	}
 	res.GolBoard = stubs.GolBoard{World: world, CurrentTurn: turn}
+	return
+}
+
+// CountAliveCells 补充注释
+func (s *Server) CountAliveCells(req stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
+	aliveCellsCount := 0
+	s.processLock.Lock()
+	for x := 0; x < s.worldWidth; x++ {
+		for y := 0; y < s.worldHeight; y++ {
+			if s.world[y][x] == 255 {
+				aliveCellsCount++
+			}
+		}
+	}
+	res.Count = aliveCellsCount
+	res.CurrentTurn = s.currentTurn
+	s.processLock.Unlock()
+	return
+}
+
+func (s *Server) GetWorld(req stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
+	s.processLock.Lock()
+	res.GolBoard = stubs.GolBoard{World: s.world, CurrentTurn: s.currentTurn, Width: s.worldWidth, Height: s.worldHeight}
+	s.processLock.Unlock()
+	return
+}
+
+func (s *Server) Pause(req stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
+	if s.paused {
+		s.processLock.Unlock()
+		s.paused = false
+	} else {
+		s.processLock.Lock()
+		s.paused = true
+	}
+	res.CurrentTurn = s.currentTurn
+	return
+}
+
+func (s *Server) Stop(req stubs.StopRequest, res *stubs.StopResponse) (err error) {
+	fmt.Println("Server stopped")
+	os.Exit(0)
 	return
 }
 
@@ -86,19 +141,14 @@ func main() {
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", *portPtr)
-	conns := make(chan net.Conn)
-
 	if err != nil {
 		handleError(err)
 		return
-
 	}
 	defer ln.Close()
-	go acceptConns(ln, conns)
 	rpc.Register(new(Server))
 	fmt.Println("Server Start, Listening on 8080")
 	rpc.Accept(ln)
-
 }
 
 // build 接收长度和宽度并生成一个指定长度x宽度的2D矩阵
@@ -109,19 +159,6 @@ func build(height, width int) [][]uint8 {
 	}
 	return newMatrix
 }
-
-/*// countAliveCells 返回世界中存活细胞的数量
-func(s *Server) countAliveCells(req stubs.NextStateRequest, res *stubs.NextStateResponse)(err error) {
-	aliveCellsCount := 0
-	for x := 0; x < req.GolBoard.Width; x++ {
-		for y := 0; y < req.GolBoard.Height; y++ {
-			if req.GolBoard.World(y, x) == 255 {
-				aliveCellsCount++
-			}
-		}
-	}
-	return
-}*/
 
 // calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
 func calculateNextState(startY, endY, width, height int, world [][]uint8) [][]uint8 {
@@ -143,7 +180,6 @@ func calculateNextState(startY, endY, width, height int, world [][]uint8) [][]ui
 				worldNextState[y-startY][x] = 0
 			}
 		}
-
 	}
 	return worldNextState
 

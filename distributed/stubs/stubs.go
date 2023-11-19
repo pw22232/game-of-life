@@ -7,12 +7,40 @@ type GolBoard struct {
 	Height      int
 }
 
-type NextStateRequest struct {
+type RunGolRequest struct {
 	GolBoard GolBoard
 	Threads  int
 	Turns    int
 }
 
-type NextStateResponse struct {
+type RunGolResponse struct {
 	GolBoard GolBoard
+}
+
+type CurrentWorldRequest struct {
+}
+
+type CurrentWorldResponse struct {
+	GolBoard GolBoard
+}
+
+type AliveCellsCountRequest struct {
+}
+
+type AliveCellsCountResponse struct {
+	CurrentTurn int
+	Count       int
+}
+
+type PauseRequest struct {
+}
+
+type PauseResponse struct {
+	CurrentTurn int
+}
+
+type StopRequest struct {
+}
+
+type StopResponse struct {
 }
