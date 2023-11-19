@@ -27,7 +27,7 @@ func handleError(err error) {
 
 // RunGol distributor divides the work between workers and interacts with other goroutines.
 func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err error) {
-	// 结束服务器当前的Gol并开始新的Gol
+	//结束服务器当前的Gol并开始新的Gol
 	if s.paused {
 		s.processLock.Unlock()
 	}
@@ -60,7 +60,6 @@ func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 			}
 			outChannel := make(chan [][]uint8)
 			outChannels = append(outChannels, outChannel)
-			//r(startY, endY, width, height int, world [][]uint8, out chan<- [][]uint8)
 			go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height, world, outChannel)
 			currentHeight += size
 		}
@@ -137,10 +136,10 @@ func (s *Server) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 }*/
 
 func main() {
-	portPtr := flag.String("port", ":8080", "port to listen on")
+	portPtr := flag.String("port", "8080", "port to listen on")
 	flag.Parse()
 
-	ln, err := net.Listen("tcp", *portPtr)
+	ln, err := net.Listen("tcp", ":"+*portPtr)
 	if err != nil {
 		handleError(err)
 		return
@@ -149,7 +148,7 @@ func main() {
 		_ = ln.Close()
 	}()
 	_ = rpc.Register(new(Server))
-	fmt.Println("Server Start, Listening on 8080")
+	fmt.Println("Server Start, Listening on " + ln.Addr().String())
 	rpc.Accept(ln)
 }
 
