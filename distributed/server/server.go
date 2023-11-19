@@ -90,7 +90,7 @@ func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 }
 
 // CountAliveCells 补充注释
-func (s *Server) CountAliveCells(req stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
+func (s *Server) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
 	aliveCellsCount := 0
 	s.processLock.Lock()
 	for x := 0; x < s.worldWidth; x++ {
@@ -106,14 +106,14 @@ func (s *Server) CountAliveCells(req stubs.AliveCellsCountRequest, res *stubs.Al
 	return
 }
 
-func (s *Server) GetWorld(req stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
+func (s *Server) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
 	s.processLock.Lock()
 	res.GolBoard = stubs.GolBoard{World: s.world, CurrentTurn: s.currentTurn, Width: s.worldWidth, Height: s.worldHeight}
 	s.processLock.Unlock()
 	return
 }
 
-func (s *Server) Pause(req stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
+func (s *Server) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	if s.paused {
 		s.processLock.Unlock()
 		s.paused = false
@@ -125,7 +125,7 @@ func (s *Server) Pause(req stubs.PauseRequest, res *stubs.PauseResponse) (err er
 	return
 }
 
-func (s *Server) Stop(req stubs.StopRequest, res *stubs.StopResponse) (err error) {
+func (s *Server) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	fmt.Println("Server stopped")
 	os.Exit(0)
 	return
@@ -145,8 +145,10 @@ func main() {
 		handleError(err)
 		return
 	}
-	defer ln.Close()
-	rpc.Register(new(Server))
+	defer func() {
+		_ = ln.Close()
+	}()
+	_ = rpc.Register(new(Server))
 	fmt.Println("Server Start, Listening on 8080")
 	rpc.Accept(ln)
 }
