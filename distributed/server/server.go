@@ -46,11 +46,28 @@ func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 	s.worldHeight = req.GolBoard.Height
 	s.worldWidth = req.GolBoard.Width
 	s.processLock.Unlock()
+	averageHeight := req.GolBoard.Height / req.Threads
+	restHeight := req.GolBoard.Height % req.Threads
+	size := averageHeight
+
 	for turn = 0; turn < req.Turns; turn++ {
-		outChannel := make(chan []util.Cell)
-		go calculateNextState(0, req.GolBoard.Height, req.GolBoard.Width, req.GolBoard.Height, world, outChannel)
-		flippedCells := <-outChannel
-		s.processLock.Lock()
+		var outChannels []chan []util.Cell
+		currentHeight := 0
+		for i := 0; i < req.Threads; i++ {
+			size = averageHeight
+			if i < restHeight {
+				// 将除不尽的部分分配到前几个threads中，每个threads一行
+				size += 1
+			}
+			outChannel := make(chan []util.Cell)
+			outChannels = append(outChannels, outChannel)
+			go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height, world, outChannel)
+			currentHeight += size
+		}
+		var flippedCells []util.Cell
+		for i := 0; i < req.Threads; i++ {
+			flippedCells = append(flippedCells, <-outChannels[i]...)
+		}
 		for _, flippedCell := range flippedCells {
 			if world[flippedCell.Y][flippedCell.X] == 255 {
 				world[flippedCell.Y][flippedCell.X] = 0
@@ -58,6 +75,7 @@ func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 				world[flippedCell.Y][flippedCell.X] = 255
 			}
 		}
+		s.processLock.Lock()
 		s.world = world
 		s.currentTurn = turn + 1
 		s.processLock.Unlock()
@@ -138,7 +156,7 @@ func main() {
 }
 
 // calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
-func calculateNextState(startY, endY, width, height int, world [][]uint8, outChannel chan []util.Cell) {
+func calculateNextState(startY, endY, width, height int, world [][]uint8) []util.Cell {
 	// 计算所有需要改变的细胞
 	var flippedCells []util.Cell
 	// 计算每个点周围的邻居并将状态写入worldNextState
@@ -153,8 +171,7 @@ func calculateNextState(startY, endY, width, height int, world [][]uint8, outCha
 			}
 		}
 	}
-	outChannel <- flippedCells
-
+	return flippedCells
 }
 
 // countLivingNeighbour 通过调用 isAlive 函数判断一个节点有多少存活的邻居，返回存活邻居的数量
@@ -185,4 +202,9 @@ func isAlive(x, y, width, height int, world [][]uint8) bool {
 		return true
 	}
 	return false
+}
+
+// 将任务分配到每个线程
+func worker(startY, endY, width, height int, world [][]uint8, out chan<- []util.Cell) {
+	out <- calculateNextState(startY, endY, width, height, world)
 }
