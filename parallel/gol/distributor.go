@@ -64,34 +64,24 @@ func countAliveCells(p Params, immutableWorld func(y, x int) uint8) int {
 
 // calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
 // will compute the next state of the world starting with column startY and ending with column endY-1
-func calculateNextState(startY, endY, width, height int, immutableWorld func(y, x int) uint8, events chan<- Event) [][]uint8 {
-	worldNextState := build(endY-startY, width)
-	// 将要处理的world部分的数据映射到worldNextState上
-	//Map the data of the world part to be processed to worldNextState
-	for y := startY; y < endY; y++ {
-		for x := 0; x < width; x++ {
-			worldNextState[y-startY][x] = immutableWorld(y, x) // worldNextState的坐标系从y=0开始
-		}
-	}
-	// 计算每个点周围的邻居并将状态写入worldNextState
-	//calculate the state of each point's neighbours, and write in worldNextState
+func calculateNextState(startY, endY, width, height int, immutableWorld func(y, x int) uint8) []util.Cell {
+	// 计算所有需要改变的细胞
+	var flippedCells []util.Cell
 	neighboursCount := 0
 	for y := startY; y < endY; y++ {
 		for x := 0; x < width; x++ {
 			neighboursCount = countLivingNeighbour(x, y, width, height, immutableWorld)
 			if immutableWorld(y, x) == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
 				// Resurrection of dead cells when they have exactly 3 neighbours
-				worldNextState[y-startY][x] = 255
-				events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
+				flippedCells = append(flippedCells, util.Cell{X: x, Y: y})
 			} else if immutableWorld(y, x) == 255 && (neighboursCount < 2 || neighboursCount > 3) { // 存活的细胞邻居少于2个或多于3个时死亡
 				//Surviving cell die when there are fewer than two or more than three neighbours.
-				worldNextState[y-startY][x] = 0
-				events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
+				flippedCells = append(flippedCells, util.Cell{X: x, Y: y})
 			}
 		}
 
 	}
-	return worldNextState
+	return flippedCells
 }
 
 // countLivingNeighbour 通过调用 isAlive 函数判断一个节点有多少存活的邻居，返回存活邻居的数量
@@ -151,8 +141,8 @@ func outputPGM(c distributorChannels, p Params, turn int, world [][]uint8) {
 
 // 将任务分配到每个线程
 // Allocate tasks to each thread
-func worker(startY, endY int, p Params, immutableWorld func(y, x int) uint8, events chan<- Event, out chan<- [][]uint8) {
-	out <- calculateNextState(startY, endY, p.ImageWidth, p.ImageHeight, immutableWorld, events)
+func worker(startY, endY int, p Params, immutableWorld func(y, x int) uint8, out chan<- []util.Cell) {
+	out <- calculateNextState(startY, endY, p.ImageWidth, p.ImageHeight, immutableWorld)
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -228,7 +218,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	// 根据需要处理的回合数量进行循环
 	//Loop according to the number of rounds to be processed
 	for turn = 0; turn < p.Turns && !isForceQuit; {
-		var outChannels []chan [][]uint8
+		var outChannels []chan []util.Cell
 		averageHeight := p.ImageHeight / p.Threads
 		restHeight := p.ImageHeight % p.Threads
 		currentHeight := 0
@@ -240,23 +230,26 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			if i < restHeight {
 				size += 1
 			}
-			outChannel := make(chan [][]uint8)
+			outChannel := make(chan []util.Cell)
 			outChannels = append(outChannels, outChannel)
-			go worker(currentHeight, currentHeight+size, p, immutableWorld, c.events, outChannel)
+			go worker(currentHeight, currentHeight+size, p, immutableWorld, outChannel)
 			currentHeight += size
 		}
 
-		var worldPart [][]uint8
-		var newWorld [][]uint8
+		var worldPart []util.Cell
 		for i := 0; i < p.Threads; i++ {
 			worldPart = <-outChannels[i]
-			for _, linePart := range worldPart {
-				newWorld = append(newWorld, linePart)
-			}
 		}
 		processLock.Lock()
+		for _, flippedCell := range worldPart {
+			if world[flippedCell.Y][flippedCell.X] == 255 {
+				world[flippedCell.Y][flippedCell.X] = 0
+			} else {
+				world[flippedCell.Y][flippedCell.X] = 255
+			}
+			c.events <- CellFlipped{turn, flippedCell}
+		}
 		turn++
-		world = newWorld
 		// 将世界转换为函数来防止其被意外修改
 		//Convert the world to a function to prevent it from being accidentally modified
 		immutableWorld = makeImmutableWorld(world)
