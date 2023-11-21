@@ -236,12 +236,12 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			currentHeight += size
 		}
 
-		var worldPart []util.Cell
+		var flippedCells []util.Cell
 		for i := 0; i < p.Threads; i++ {
-			worldPart = <-outChannels[i]
+			flippedCells = append(flippedCells, <-outChannels[i]...)
 		}
 		processLock.Lock()
-		for _, flippedCell := range worldPart {
+		for _, flippedCell := range flippedCells {
 			if world[flippedCell.Y][flippedCell.X] == 255 {
 				world[flippedCell.Y][flippedCell.X] = 0
 			} else {
@@ -250,9 +250,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			c.events <- CellFlipped{turn, flippedCell}
 		}
 		turn++
-		// 将世界转换为函数来防止其被意外修改
-		//Convert the world to a function to prevent it from being accidentally modified
-		immutableWorld = makeImmutableWorld(world)
 		c.events <- TurnComplete{CompletedTurns: turn}
 		processLock.Unlock()
 		select {
