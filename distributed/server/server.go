@@ -88,6 +88,7 @@ func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 		}
 	}
 	res.GolBoard = stubs.GolBoard{World: world, CurrentTurn: turn}
+	s.working = false
 	return
 }
 
@@ -131,28 +132,6 @@ func (s *Server) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	fmt.Println("Server stopped")
 	os.Exit(0)
 	return
-}
-
-/*func test(req stubs.TestReq, res stubs.TestRes) {
-	res.Value = req.Value + 1
-	return
-}*/
-
-func main() {
-	portPtr := flag.String("port", "8080", "port to listen on")
-	flag.Parse()
-
-	ln, err := net.Listen("tcp", ":"+*portPtr)
-	if err != nil {
-		handleError(err)
-		return
-	}
-	defer func() {
-		_ = ln.Close()
-	}()
-	_ = rpc.Register(new(Server))
-	fmt.Println("Server Start, Listening on " + ln.Addr().String())
-	rpc.Accept(ln)
 }
 
 // calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
@@ -207,4 +186,21 @@ func isAlive(x, y, width, height int, world [][]uint8) bool {
 // 将任务分配到每个线程
 func worker(startY, endY, width, height int, world [][]uint8, out chan<- []util.Cell) {
 	out <- calculateNextState(startY, endY, width, height, world)
+}
+
+func main() {
+	portPtr := flag.String("port", "8080", "port to listen on")
+	flag.Parse()
+
+	ln, err := net.Listen("tcp", ":"+*portPtr)
+	if err != nil {
+		handleError(err)
+		return
+	}
+	defer func() {
+		_ = ln.Close()
+	}()
+	_ = rpc.Register(new(Server))
+	fmt.Println("Server Start, Listening on " + ln.Addr().String())
+	rpc.Accept(ln)
 }

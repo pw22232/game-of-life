@@ -103,7 +103,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	// 调用服务器运行所有的回合
 	go func() {
 		err = server.Call("Server.RunGol", req, &res)
-		if err != nil {
+		if err == nil {
 			finalTurnFinish <- true
 		}
 	}()
