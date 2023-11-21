@@ -70,7 +70,10 @@ func outputPGM(c distributorChannels, p Params, turn int, world [][]uint8) {
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
-	server, err := rpc.Dial("tcp", "localhost:8080")
+	address := "localhost"
+	port := "8080"
+
+	server, err := rpc.Dial("tcp", address+":"+port)
 	dialError(err, c)
 
 	turn := 0
@@ -109,11 +112,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	go func() {
 		for {
 			<-ticker.C
-			go func() {
-				err = server.Call("Server.CountAliveCells", countReq, &countRes)
-				dialError(err, c)
-				countFinish <- true
-			}()
+			err = server.Call("Server.CountAliveCells", countReq, &countRes)
+			dialError(err, c)
+			countFinish <- true
 		}
 	}()
 
