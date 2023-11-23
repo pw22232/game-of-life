@@ -9,10 +9,7 @@ type GolBoard struct {
 	Height      int
 }
 
-type ServerAddress struct {
-	Address string
-	Port    string
-}
+// These will use by distributor
 
 type RunGolRequest struct {
 	GolBoard GolBoard
@@ -23,43 +20,10 @@ type RunGolResponse struct {
 	GolBoard GolBoard
 }
 
-type InitRequest struct {
-	GolBoard       GolBoard
-	Threads        int
-	Turns          int
-	PreviousServer ServerAddress
-	NextServer     ServerAddress
-}
-type InitResponse struct {
-}
-
-type NextTurnRequest struct {
-}
-type NextTurnResponse struct {
-}
-
-type FirstLineRequest struct {
-}
-type FirstLineResponse struct {
-	Line []uint8
-}
-
-type LastLineRequest struct {
-}
-type LastLineResponse struct {
-	Line []uint8
-}
-
 type CurrentWorldRequest struct {
 }
 type CurrentWorldResponse struct {
 	GolBoard GolBoard
-}
-
-type WorldChangeRequest struct {
-}
-type WorldChangeResponse struct {
-	FlippedCells []util.Cell
 }
 
 type AliveCellsCountRequest struct {
@@ -68,6 +32,20 @@ type AliveCellsCountResponse struct {
 	CurrentTurn int
 	Count       int
 }
+
+// These will use by broker
+
+type NextTurnRequest struct {
+	UpperHalo  []uint8
+	World      [][]uint8
+	DownerHalo [][]uint8
+	Threads    int
+}
+type NextTurnResponse struct {
+	FlippedCells []util.Cell
+}
+
+// These will use by keyboard control
 
 type PauseRequest struct {
 }
@@ -79,3 +57,35 @@ type StopRequest struct {
 }
 type StopResponse struct {
 }
+
+// These will use by halo switch
+//type ServerAddress struct {
+//	Address string
+//	Port    string
+//}
+
+//type InitRequest struct {
+//	GolBoard       GolBoard
+//	Threads        int
+//	Turns          int
+//	PreviousServer ServerAddress
+//	NextServer     ServerAddress
+//}
+//type InitResponse struct {
+//}
+//type FirstLineRequest struct {
+//}
+//type FirstLineResponse struct {
+//	Line []uint8
+//}
+//
+//type LastLineRequest struct {
+//}
+//type LastLineResponse struct {
+//	Line []uint8
+//}
+//type WorldChangeRequest struct {
+//}
+//type WorldChangeResponse struct {
+//	FlippedCells []util.Cell
+//}
