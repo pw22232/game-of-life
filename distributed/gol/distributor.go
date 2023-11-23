@@ -73,7 +73,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	address := "localhost"
 	port := "8080"
 
-	server, err := rpc.Dial("tcp", address+":"+port)
+	broker, err := rpc.Dial("tcp", address+":"+port)
 	dialError(err, c)
 
 	turn := 0
@@ -88,101 +88,102 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		}
 	}
 
-	finalTurnFinish := make(chan bool)
-	countFinish := make(chan bool)
-	quit := make(chan bool)
+	if p.Turns > 0 {
+		finalTurnFinish := make(chan stubs.GolBoard)
+		countFinish := make(chan bool)
+		quit := make(chan bool)
 
-	golBoard := stubs.GolBoard{World: world, Width: p.ImageWidth, Height: p.ImageHeight}
-	req := stubs.RunGolRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
-	var countReq stubs.AliveCellsCountRequest
-	var res stubs.RunGolResponse
-	var countRes stubs.AliveCellsCountResponse
-	var worldReq stubs.CurrentWorldRequest
-	var worldRes stubs.CurrentWorldResponse
-	ticker := time.NewTicker(2 * time.Second)
-	// 调用服务器运行所有的回合
-	go func() {
-		err = server.Call("Server.RunGol", req, &res)
-		if err == nil {
-			finalTurnFinish <- true
-		}
-	}()
+		golBoard := stubs.GolBoard{World: world, Width: p.ImageWidth, Height: p.ImageHeight}
+		req := stubs.RunGolRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
+		var countReq stubs.AliveCellsCountRequest
+		var res stubs.RunGolResponse
+		var countRes stubs.AliveCellsCountResponse
+		var worldReq stubs.CurrentWorldRequest
+		var worldRes stubs.CurrentWorldResponse
+		ticker := time.NewTicker(2 * time.Second)
+		// 调用服务器运行所有的回合
+		go func() {
+			err = broker.Call("Broker.RunGol", req, &res)
+			if err == nil {
+				finalTurnFinish <- res.GolBoard
+			}
+		}()
 
-	// 调用服务器每隔两秒返回存活细胞数量
-	go func() {
-		for {
-			<-ticker.C
-			err = server.Call("Server.CountAliveCells", countReq, &countRes)
-			dialError(err, c)
-			countFinish <- true
-		}
-	}()
-
-	// 按键控制器
-	go func() {
-		var key rune
-		for {
-			key = <-keyPresses
-			if key == 'q' {
-				err = server.Call("Server.CountAliveCells", countReq, &countRes)
-				turn = countRes.CurrentTurn
-				quit <- true
-			} else if key == 'k' {
-				err = server.Call("Server.GetWorld", worldReq, &worldRes)
+		// 调用服务器每隔两秒返回存活细胞数量
+		go func() {
+			for {
+				<-ticker.C
+				err = broker.Call("Broker.CountAliveCells", countReq, &countRes)
 				dialError(err, c)
-				outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
-				turn = worldRes.GolBoard.CurrentTurn
-				stopRes := stubs.StopResponse{}
-				err = server.Call("Server.Stop", stubs.StopRequest{}, &stopRes)
-				quit <- true
-			} else if key == 'p' {
-				pauseRes := stubs.PauseResponse{}
-				err = server.Call("Server.Pause", stubs.PauseRequest{}, &pauseRes)
-				dialError(err, c)
-				c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
-				ticker.Stop()
-				paused := true
-				for paused {
-					key = <-keyPresses
-					if key == 'p' {
-						res := stubs.PauseResponse{}
-						err = server.Call("Server.Pause", stubs.PauseRequest{}, &res)
-						dialError(err, c)
-						ticker.Reset(2 * time.Second) // 重新开始ticker计时
-						paused = false
-						c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
+				countFinish <- true
+			}
+		}()
+
+		// 按键控制器
+		go func() {
+			var key rune
+			for {
+				key = <-keyPresses
+				if key == 'q' {
+					err = broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					turn = countRes.CurrentTurn
+					quit <- true
+				} else if key == 'k' {
+					err = broker.Call("Broker.GetWorld", worldReq, &worldRes)
+					dialError(err, c)
+					outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
+					turn = worldRes.GolBoard.CurrentTurn
+					_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
+					quit <- true
+				} else if key == 'p' {
+					pauseRes := stubs.PauseResponse{}
+					err = broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
+					dialError(err, c)
+					c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
+					ticker.Stop()
+					paused := true
+					for paused {
+						key = <-keyPresses
+						if key == 'p' {
+							res := stubs.PauseResponse{}
+							err = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
+							dialError(err, c)
+							ticker.Reset(2 * time.Second) // 重新开始ticker计时
+							paused = false
+							c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
+						}
 					}
+				} else if key == 's' {
+					err = broker.Call("Broker.GetWorld", worldReq, &worldRes)
+					dialError(err, c)
+					go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 				}
-			} else if key == 's' {
-				err = server.Call("Server.GetWorld", worldReq, &worldRes)
+			}
+		}()
+
+		finishFlag := false
+		for {
+			select {
+			case board := <-finalTurnFinish:
+				finishFlag = true
+				turn = board.CurrentTurn
 				dialError(err, c)
-				go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
+				outputPGM(c, p, board.CurrentTurn, board.World)
+				c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
+			case <-quit:
+				finishFlag = true
+			case <-countFinish:
+				c.events <- AliveCellsCount{CompletedTurns: countRes.CurrentTurn, CellsCount: countRes.Count}
+			}
+			if finishFlag {
+				break
 			}
 		}
-	}()
-
-	finishFlag := false
-	for {
-		select {
-		case <-finalTurnFinish:
-			finishFlag = true
-			err = server.Call("Server.GetWorld", worldReq, &worldRes)
-			turn = worldRes.GolBoard.CurrentTurn
-			dialError(err, c)
-			outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
-			c.events <- FinalTurnComplete{res.GolBoard.CurrentTurn, findAliveCells(p, res.GolBoard.World)}
-		case <-quit:
-			finishFlag = true
-		case <-countFinish:
-			c.events <- AliveCellsCount{CompletedTurns: countRes.CurrentTurn, CellsCount: countRes.Count}
-		}
-		if finishFlag {
-			break
-		}
+	} else {
+		board := stubs.GolBoard{World: world, CurrentTurn: 0, Width: p.ImageWidth, Height: p.ImageHeight}
+		outputPGM(c, p, board.CurrentTurn, board.World)
+		c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
 	}
-
-	// TODO: Report the final state using FinalTurnCompleteEvent.
-
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle

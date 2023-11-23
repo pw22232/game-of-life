@@ -12,125 +12,51 @@ import (
 )
 
 type Server struct {
-	world       [][]uint8
-	worldWidth  int
-	worldHeight int
-	currentTurn int
-	working     bool
-	paused      bool
-	processLock sync.Mutex
-	quit        chan bool
+	dataLock sync.Mutex // 在写入数据时锁定
 }
 
 func handleError(err error) {
 	fmt.Println("Error:", err)
 }
 
-// RunGol distributor divides the work between workers and interacts with other goroutines.
-func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err error) {
-	//结束服务器当前的Gol并开始新的Gol
-	if s.paused {
-		s.processLock.Unlock()
-	}
-	if s.working {
-		s.quit <- true
-	}
-	s.working = true
-	s.quit = make(chan bool)
-	// 根据需要处理的回合数量进行循环
-	world := req.GolBoard.World
-	turn := 0
-	s.processLock.Lock()
-	s.currentTurn = 0
-	s.world = req.GolBoard.World
-	s.worldHeight = req.GolBoard.Height
-	s.worldWidth = req.GolBoard.Width
-	s.processLock.Unlock()
+// worldCreate 将晕区和世界结合生成一个新的世界
+func worldCreate(height int, world [][]uint8, upperHalo, downerHalo []uint8) [][]uint8 {
+	newWorld := make([][]uint8, 0, height+2)
+	newWorld = append(newWorld, upperHalo)
+	newWorld = append(newWorld, world...)
+	newWorld = append(newWorld, downerHalo)
+	return newWorld
+}
+
+func (s *Server) NextTurn(req stubs.NextTurnRequest, res *stubs.NextTurnResponse) (err error) {
+	world := worldCreate(req.GolBoard.Height, req.GolBoard.World, req.UpperHalo, req.DownerHalo)
+	var outChannels []chan []util.Cell
+	currentHeight := 1
 	averageHeight := req.GolBoard.Height / req.Threads
 	restHeight := req.GolBoard.Height % req.Threads
 	size := averageHeight
-
-	for turn = 0; turn < req.Turns; turn++ {
-		var outChannels []chan []util.Cell
-		currentHeight := 0
-		for i := 0; i < req.Threads; i++ {
-			size = averageHeight
-			if i < restHeight {
-				// 将除不尽的部分分配到前几个threads中，每个threads一行
-				size += 1
-			}
-			outChannel := make(chan []util.Cell)
-			outChannels = append(outChannels, outChannel)
-			go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height, world, outChannel)
-			currentHeight += size
+	for i := 0; i < req.Threads; i++ {
+		size = averageHeight
+		if i < restHeight {
+			// 将除不尽的部分分配到前几个threads中，每个threads一行
+			size += 1
 		}
-		var flippedCells []util.Cell
-		for i := 0; i < req.Threads; i++ {
-			flippedCells = append(flippedCells, <-outChannels[i]...)
-		}
-		for _, flippedCell := range flippedCells {
-			if world[flippedCell.Y][flippedCell.X] == 255 {
-				world[flippedCell.Y][flippedCell.X] = 0
-			} else {
-				world[flippedCell.Y][flippedCell.X] = 255
-			}
-		}
-		s.processLock.Lock()
-		s.world = world
-		s.currentTurn = turn + 1
-		s.processLock.Unlock()
-
-		select {
-		case <-s.quit:
-			return
-		default:
-			break
-		}
+		outChannel := make(chan []util.Cell)
+		outChannels = append(outChannels, outChannel)
+		go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height+2, world, outChannel)
+		currentHeight += size
 	}
-	res.GolBoard = stubs.GolBoard{World: world, CurrentTurn: turn}
-	s.working = false
-	return
-}
-
-// CountAliveCells 补充注释
-func (s *Server) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
-	aliveCellsCount := 0
-	s.processLock.Lock()
-	for x := 0; x < s.worldWidth; x++ {
-		for y := 0; y < s.worldHeight; y++ {
-			if s.world[y][x] == 255 {
-				aliveCellsCount++
-			}
-		}
+	var flippedCells []util.Cell
+	for i := 0; i < req.Threads; i++ {
+		flippedCells = append(flippedCells, <-outChannels[i]...)
 	}
-	res.Count = aliveCellsCount
-	res.CurrentTurn = s.currentTurn
-	s.processLock.Unlock()
-	return
-}
-
-func (s *Server) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
-	s.processLock.Lock()
-	res.GolBoard = stubs.GolBoard{World: s.world, CurrentTurn: s.currentTurn, Width: s.worldWidth, Height: s.worldHeight}
-	s.processLock.Unlock()
-	return
-}
-
-func (s *Server) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
-	if s.paused {
-		s.processLock.Unlock()
-		s.paused = false
-	} else {
-		s.processLock.Lock()
-		s.paused = true
-	}
-	res.CurrentTurn = s.currentTurn
+	res.FlippedCells = flippedCells
 	return
 }
 
 func (s *Server) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	fmt.Println("Server stopped")
-	os.Exit(0)
+	os.Exit(1)
 	return
 }
 
@@ -189,7 +115,7 @@ func worker(startY, endY, width, height int, world [][]uint8, out chan<- []util.
 }
 
 func main() {
-	portPtr := flag.String("port", "8080", "port to listen on")
+	portPtr := flag.String("port", "8081", "port to listen on")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", ":"+*portPtr)
