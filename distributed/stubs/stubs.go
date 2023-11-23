@@ -35,10 +35,15 @@ type AliveCellsCountResponse struct {
 
 // These will use by broker
 
+type ServerAddress struct {
+	Address string
+	Port    string
+}
+
 type NextTurnRequest struct {
 	UpperHalo  []uint8
-	World      [][]uint8
-	DownerHalo [][]uint8
+	GolBoard   GolBoard
+	DownerHalo []uint8
 	Threads    int
 }
 type NextTurnResponse struct {
@@ -59,10 +64,6 @@ type StopResponse struct {
 }
 
 // These will use by halo switch
-//type ServerAddress struct {
-//	Address string
-//	Port    string
-//}
 
 //type InitRequest struct {
 //	GolBoard       GolBoard
