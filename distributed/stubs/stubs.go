@@ -9,14 +9,6 @@ type GolBoard struct {
 	Height      int
 }
 
-type ServerIndex int
-
-const (
-	First ServerIndex = iota
-	Middle
-	Last
-)
-
 type ServerAddress struct {
 	Address string
 	Port    string
@@ -35,7 +27,6 @@ type InitRequest struct {
 	GolBoard       GolBoard
 	Threads        int
 	Turns          int
-	ServerIndex    ServerIndex
 	PreviousServer ServerAddress
 	NextServer     ServerAddress
 }
