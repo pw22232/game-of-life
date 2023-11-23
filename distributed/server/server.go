@@ -19,8 +19,8 @@ func handleError(err error) {
 	fmt.Println("Error:", err)
 }
 
-// worldCopy 将晕区和世界结合生成一个新的世界
-func worldCopy(height int, world [][]uint8, upperHalo, downerHalo []uint8) [][]uint8 {
+// worldCreate 将晕区和世界结合生成一个新的世界
+func worldCreate(height int, world [][]uint8, upperHalo, downerHalo []uint8) [][]uint8 {
 	newWorld := make([][]uint8, 0, height+2)
 	newWorld = append(newWorld, upperHalo)
 	newWorld = append(newWorld, world...)
@@ -29,8 +29,7 @@ func worldCopy(height int, world [][]uint8, upperHalo, downerHalo []uint8) [][]u
 }
 
 func (s *Server) NextTurn(req stubs.NextTurnRequest, res *stubs.NextTurnResponse) (err error) {
-	world := worldCopy(req.GolBoard.Height, req.GolBoard.World, req.UpperHalo, req.DownerHalo)
-
+	world := worldCreate(req.GolBoard.Height, req.GolBoard.World, req.UpperHalo, req.DownerHalo)
 	var outChannels []chan []util.Cell
 	currentHeight := 1
 	averageHeight := req.GolBoard.Height / req.Threads
@@ -44,7 +43,7 @@ func (s *Server) NextTurn(req stubs.NextTurnRequest, res *stubs.NextTurnResponse
 		}
 		outChannel := make(chan []util.Cell)
 		outChannels = append(outChannels, outChannel)
-		go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height, world, outChannel)
+		go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height+2, world, outChannel)
 		currentHeight += size
 	}
 	var flippedCells []util.Cell
@@ -57,7 +56,7 @@ func (s *Server) NextTurn(req stubs.NextTurnRequest, res *stubs.NextTurnResponse
 
 func (s *Server) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	fmt.Println("Server stopped")
-	os.Exit(0)
+	os.Exit(1)
 	return
 }
 
@@ -71,9 +70,9 @@ func calculateNextState(startY, endY, width, height int, world [][]uint8) []util
 		for x := 0; x < width; x++ {
 			neighboursCount = countLivingNeighbour(x, y, width, height, world)
 			if world[y][x] == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
-				flippedCells = append(flippedCells, util.Cell{X: x, Y: y - 1})
+				flippedCells = append(flippedCells, util.Cell{X: x, Y: y})
 			} else if world[y][x] == 255 && (neighboursCount < 2 || neighboursCount > 3) { // 存活的细胞邻居少于2个或多于3个时死亡
-				flippedCells = append(flippedCells, util.Cell{X: x, Y: y - 1})
+				flippedCells = append(flippedCells, util.Cell{X: x, Y: y})
 			}
 		}
 	}
@@ -116,7 +115,7 @@ func worker(startY, endY, width, height int, world [][]uint8, out chan<- []util.
 }
 
 func main() {
-	portPtr := flag.String("port", "8080", "port to listen on")
+	portPtr := flag.String("port", "8081", "port to listen on")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", ":"+*portPtr)
