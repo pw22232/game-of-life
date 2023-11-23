@@ -12,90 +12,96 @@ import (
 )
 
 type Server struct {
-	world       [][]uint8
-	worldWidth  int
-	worldHeight int
-	currentTurn int
-	working     bool
-	paused      bool
-	processLock sync.Mutex
-	quit        chan bool
+	lastWorld      [][]uint8
+	world          [][]uint8
+	nextWorld      [][]uint8
+	serverIndex    stubs.ServerIndex
+	previousServer stubs.ServerAddress
+	nextServer     stubs.ServerAddress
+	worldWidth     int
+	worldHeight    int
+	threads        int
+	currentTurn    int
+	workflow       int
+	dataLock       sync.Mutex // 在写入除了世界以外的数据时锁定
+	worldLock      sync.Mutex // 在写入世界时锁定
 }
 
 func handleError(err error) {
 	fmt.Println("Error:", err)
 }
 
-// RunGol distributor divides the work between workers and interacts with other goroutines.
-func (s *Server) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err error) {
-	//结束服务器当前的Gol并开始新的Gol
-	if s.paused {
-		s.processLock.Unlock()
+// Init 初始化服务器
+func (s *Server) Init(req stubs.InitRequest, res *stubs.InitResponse) (err error) {
+	s.dataLock.Lock()
+	s.worldLock.Lock()
+	// workflow为0时代表服务器没有初始化
+	if s.workflow > 0 {
+		s.workflow += 1
 	}
-	if s.working {
-		s.quit <- true
-	}
-	s.working = true
-	s.quit = make(chan bool)
-	// 根据需要处理的回合数量进行循环
-	world := req.GolBoard.World
-	turn := 0
-	s.processLock.Lock()
-	s.currentTurn = 0
+	// 初始化服务器
+	s.lastWorld = req.GolBoard.World
 	s.world = req.GolBoard.World
+	s.currentTurn = req.GolBoard.CurrentTurn
 	s.worldHeight = req.GolBoard.Height
 	s.worldWidth = req.GolBoard.Width
-	s.processLock.Unlock()
-	averageHeight := req.GolBoard.Height / req.Threads
-	restHeight := req.GolBoard.Height % req.Threads
+	s.threads = req.Threads
+	s.serverIndex = req.ServerIndex
+	switch s.serverIndex {
+	case stubs.First:
+		s.nextServer = req.NextServer
+	case stubs.Middle:
+		s.previousServer = req.NextServer
+		s.nextServer = req.NextServer
+	case stubs.Last:
+		s.previousServer = req.NextServer
+	}
+	s.dataLock.Unlock()
+	s.worldLock.Unlock()
+	return
+}
+
+func (s *Server) NextTurn(_ stubs.NextTurnRequest, _ *stubs.NextTurnResponse) (err error) {
+	s.dataLock.Lock()
+	averageHeight := s.worldHeight / s.threads
+	restHeight := s.worldHeight % s.threads
 	size := averageHeight
 
-	for turn = 0; turn < req.Turns; turn++ {
-		var outChannels []chan []util.Cell
-		currentHeight := 0
-		for i := 0; i < req.Threads; i++ {
-			size = averageHeight
-			if i < restHeight {
-				// 将除不尽的部分分配到前几个threads中，每个threads一行
-				size += 1
-			}
-			outChannel := make(chan []util.Cell)
-			outChannels = append(outChannels, outChannel)
-			go worker(currentHeight, currentHeight+size, req.GolBoard.Width, req.GolBoard.Height, world, outChannel)
-			currentHeight += size
+	var outChannels []chan []util.Cell
+	currentHeight := 0
+	for i := 0; i < s.threads; i++ {
+		size = averageHeight
+		if i < restHeight {
+			// 将除不尽的部分分配到前几个threads中，每个threads一行
+			size += 1
 		}
-		var flippedCells []util.Cell
-		for i := 0; i < req.Threads; i++ {
-			flippedCells = append(flippedCells, <-outChannels[i]...)
-		}
-		for _, flippedCell := range flippedCells {
-			if world[flippedCell.Y][flippedCell.X] == 255 {
-				world[flippedCell.Y][flippedCell.X] = 0
-			} else {
-				world[flippedCell.Y][flippedCell.X] = 255
-			}
-		}
-		s.processLock.Lock()
-		s.world = world
-		s.currentTurn = turn + 1
-		s.processLock.Unlock()
-
-		select {
-		case <-s.quit:
-			return
-		default:
-			break
+		outChannel := make(chan []util.Cell)
+		outChannels = append(outChannels, outChannel)
+		go worker(currentHeight, currentHeight+size, s.worldWidth, s.worldWidth, s.world, outChannel)
+		currentHeight += size
+	}
+	var flippedCells []util.Cell
+	for i := 0; i < req.Threads; i++ {
+		flippedCells = append(flippedCells, <-outChannels[i]...)
+	}
+	for _, flippedCell := range flippedCells {
+		if world[flippedCell.Y][flippedCell.X] == 255 {
+			world[flippedCell.Y][flippedCell.X] = 0
+		} else {
+			world[flippedCell.Y][flippedCell.X] = 255
 		}
 	}
-	res.GolBoard = stubs.GolBoard{World: world, CurrentTurn: turn}
-	s.working = false
+	s.worldLock.Lock()
+	s.world = world
+	s.currentTurn = turn + 1
+	s.worldLock.Unlock()
 	return
 }
 
 // CountAliveCells 补充注释
 func (s *Server) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
 	aliveCellsCount := 0
-	s.processLock.Lock()
+	s.worldLock.Lock()
 	for x := 0; x < s.worldWidth; x++ {
 		for y := 0; y < s.worldHeight; y++ {
 			if s.world[y][x] == 255 {
@@ -105,23 +111,23 @@ func (s *Server) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.Aliv
 	}
 	res.Count = aliveCellsCount
 	res.CurrentTurn = s.currentTurn
-	s.processLock.Unlock()
+	s.worldLock.Unlock()
 	return
 }
 
 func (s *Server) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
-	s.processLock.Lock()
+	s.worldLock.Lock()
 	res.GolBoard = stubs.GolBoard{World: s.world, CurrentTurn: s.currentTurn, Width: s.worldWidth, Height: s.worldHeight}
-	s.processLock.Unlock()
+	s.worldLock.Unlock()
 	return
 }
 
 func (s *Server) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	if s.paused {
-		s.processLock.Unlock()
+		s.worldLock.Unlock()
 		s.paused = false
 	} else {
-		s.processLock.Lock()
+		s.worldLock.Lock()
 		s.paused = true
 	}
 	res.CurrentTurn = s.currentTurn
