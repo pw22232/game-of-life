@@ -17,7 +17,6 @@ type RunGolRequest struct {
 	Turns    int
 }
 type RunGolResponse struct {
-	GolBoard GolBoard
 }
 
 type CurrentWorldRequest struct {

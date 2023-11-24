@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -58,7 +57,7 @@ func copyWorld(height, width int, world [][]uint8) [][]uint8 {
 }
 
 // RunGol distributor divides the work between workers and interacts with other goroutines.
-func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err error) {
+func (b *Broker) RunGol(req stubs.RunGolRequest, _ *stubs.RunGolResponse) (err error) {
 	//结束Broker当前的Gol并开始新的Gol
 	if b.paused {
 		b.processLock.Unlock()
@@ -68,7 +67,6 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 	}
 	b.quit = make(chan bool)
 	b.working = true
-	turn := 0
 	// 初始化Broker
 	b.currentTurn = 0
 	b.worldWidth = req.GolBoard.Width
@@ -115,49 +113,52 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 			handleError(err)
 		}
 	}
-	// 根据需要处理的回合数量进行循环
-	for turn = 0; turn < req.Turns; turn++ {
-		currentHeight = 0
-		b.processLock.Lock()
-		world := copyWorld(b.worldWidth, b.worldHeight, b.world)
-		b.processLock.Unlock()
-		var outChannels []chan []util.Cell
-		for i := 0; i < b.nodes; i++ {
-			size = averageHeight
-			if i < restHeight {
-				size += 1
-			}
-			outChannel := make(chan []util.Cell)
-			outChannels = append(outChannels, outChannel)
-			go callNextTurn(b.serverList[i].ServerRpc, currentHeight, outChannel)
-			currentHeight += size
-		}
-		var flippedCells []util.Cell
-		for i := 0; i < b.nodes; i++ {
-			flippedCells = append(flippedCells, <-outChannels[i]...)
-		}
-		for _, flippedCell := range flippedCells {
-			if world[flippedCell.Y][flippedCell.X] == 255 {
-				world[flippedCell.Y][flippedCell.X] = 0
-			} else {
-				world[flippedCell.Y][flippedCell.X] = 255
-			}
-		}
-		b.processLock.Lock()
-		b.world = world
-		b.currentTurn = turn + 1
-		b.processLock.Unlock()
+	return
+}
 
-		select {
-		case <-b.quit:
-			err = errors.New("broker closed")
-			return
-		default:
-			break
+func (b *Broker) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) (err error) {
+	currentHeight := 0
+	b.processLock.Lock()
+	averageHeight := b.worldHeight / b.nodes
+	restHeight := b.worldHeight % b.nodes
+	world := copyWorld(b.worldWidth, b.worldHeight, b.world)
+	b.processLock.Unlock()
+	size := averageHeight
+	var outChannels []chan []util.Cell
+	for i := 0; i < b.nodes; i++ {
+		size = averageHeight
+		if i < restHeight {
+			size += 1
+		}
+		outChannel := make(chan []util.Cell)
+		outChannels = append(outChannels, outChannel)
+		go callNextTurn(b.serverList[i].ServerRpc, currentHeight, outChannel)
+		currentHeight += size
+	}
+	var flippedCells []util.Cell
+	for i := 0; i < b.nodes; i++ {
+		flippedCells = append(flippedCells, <-outChannels[i]...)
+	}
+	for _, flippedCell := range flippedCells {
+		if world[flippedCell.Y][flippedCell.X] == 255 {
+			world[flippedCell.Y][flippedCell.X] = 0
+		} else {
+			world[flippedCell.Y][flippedCell.X] = 255
 		}
 	}
-	res.GolBoard = stubs.GolBoard{World: b.world, CurrentTurn: b.currentTurn}
+	b.processLock.Lock()
+	b.world = world
+	b.currentTurn = b.currentTurn + 1
+	b.processLock.Unlock()
+
+	select {
+	case <-b.quit:
+		break
+	default:
+		break
+	}
 	b.working = false
+	res.FlippedCells = flippedCells
 	return
 }
 

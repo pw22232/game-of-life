@@ -85,6 +85,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		for x := 0; x < p.ImageWidth; x++ {
 			value := <-c.ioInput
 			world[y][x] = value
+			if value == 255 {
+				c.events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
+			}
 		}
 	}
 
@@ -92,6 +95,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		finalTurnFinish := make(chan stubs.GolBoard)
 		countFinish := make(chan bool)
 		quit := make(chan bool)
+		end := make(chan bool)
 
 		golBoard := stubs.GolBoard{World: world, Width: p.ImageWidth, Height: p.ImageHeight}
 		req := stubs.RunGolRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
@@ -101,20 +105,43 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		var worldReq stubs.CurrentWorldRequest
 		var worldRes stubs.CurrentWorldResponse
 		ticker := time.NewTicker(2 * time.Second)
+
+		// 初始化服务器
+		initErr := broker.Call("Broker.RunGol", req, &res)
+		dialError(initErr, c)
+
 		// 调用服务器运行所有的回合
 		go func() {
-			err = broker.Call("Broker.RunGol", req, &res)
-			if err == nil {
-				finalTurnFinish <- res.GolBoard
+			endFlag := false
+			for turn = 0; turn < p.Turns; turn++ {
+				nextRes := stubs.NextTurnResponse{}
+				nextErr := broker.Call("Broker.NextTurn", stubs.NextTurnRequest{}, &nextRes)
+				dialError(nextErr, c)
+				for _, flippedCell := range nextRes.FlippedCells {
+					c.events <- CellFlipped{turn, flippedCell}
+				}
+				c.events <- TurnComplete{CompletedTurns: turn}
+				select {
+				case <-end:
+					endFlag = true
+				default:
+					break
+				}
+				if endFlag {
+					return
+				}
 			}
+			var endRes stubs.CurrentWorldResponse
+			worldErr := broker.Call("Broker.GetWorld", worldReq, &endRes)
+			dialError(worldErr, c)
+			finalTurnFinish <- endRes.GolBoard
 		}()
-
 		// 调用服务器每隔两秒返回存活细胞数量
 		go func() {
 			for {
 				<-ticker.C
-				err = broker.Call("Broker.CountAliveCells", countReq, &countRes)
-				dialError(err, c)
+				aliveErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
+				dialError(aliveErr, c)
 				countFinish <- true
 			}
 		}()
@@ -125,20 +152,19 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			for {
 				key = <-keyPresses
 				if key == 'q' {
-					err = broker.Call("Broker.CountAliveCells", countReq, &countRes)
-					turn = countRes.CurrentTurn
+					_ = broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					end <- true
 					quit <- true
 				} else if key == 'k' {
-					err = broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(err, c)
+					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+					dialError(worldErr, c)
 					outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
-					turn = worldRes.GolBoard.CurrentTurn
 					_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 					quit <- true
 				} else if key == 'p' {
 					pauseRes := stubs.PauseResponse{}
-					err = broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
-					dialError(err, c)
+					pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
+					dialError(pauseErr, c)
 					c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
 					ticker.Stop()
 					paused := true
@@ -146,16 +172,16 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 						key = <-keyPresses
 						if key == 'p' {
 							res := stubs.PauseResponse{}
-							err = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
-							dialError(err, c)
+							pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
+							dialError(pauseErr, c)
 							ticker.Reset(2 * time.Second) // 重新开始ticker计时
 							paused = false
 							c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
 						}
 					}
 				} else if key == 's' {
-					err = broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(err, c)
+					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+					dialError(worldErr, c)
 					go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 				}
 			}
@@ -167,7 +193,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			case board := <-finalTurnFinish:
 				finishFlag = true
 				turn = board.CurrentTurn
-				dialError(err, c)
 				outputPGM(c, p, board.CurrentTurn, board.World)
 				c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
 			case <-quit:
