@@ -36,8 +36,9 @@ type AliveCellsCountResponse struct {
 // These will use by broker
 
 type ServerAddress struct {
-	Address string
-	Port    string
+	Address        string
+	PrivateAddress string
+	Port           string
 }
 
 type NextTurnRequest struct {

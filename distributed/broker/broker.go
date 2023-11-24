@@ -14,11 +14,11 @@ import (
 
 var Nodes int
 var NodesList = [...]stubs.ServerAddress{
-	{Address: "localhost", Port: "8081"},
-	{Address: "localhost", Port: "8082"},
-	{Address: "localhost", Port: "8083"},
-	{Address: "localhost", Port: "8084"},
-	{Address: "localhost", Port: "8085"},
+	{Address: "localhost", PrivateAddress: "localhost", Port: "8081"},
+	{Address: "localhost", PrivateAddress: "localhost", Port: "8082"},
+	{Address: "localhost", PrivateAddress: "localhost", Port: "8083"},
+	{Address: "localhost", PrivateAddress: "localhost", Port: "8084"},
+	{Address: "localhost", PrivateAddress: "localhost", Port: "8085"},
 }
 
 type Server struct {
