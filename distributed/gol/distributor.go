@@ -103,8 +103,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		ticker := time.NewTicker(2 * time.Second)
 		// 调用服务器运行所有的回合
 		go func() {
-			err = broker.Call("Broker.RunGol", req, &res)
-			if err == nil {
+			runErr := broker.Call("Broker.RunGol", req, &res)
+			if runErr == nil {
 				finalTurnFinish <- res.GolBoard
 			}
 		}()
@@ -113,8 +113,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		go func() {
 			for {
 				<-ticker.C
-				err = broker.Call("Broker.CountAliveCells", countReq, &countRes)
-				dialError(err, c)
+				countErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
+				dialError(countErr, c)
 				countFinish <- true
 			}
 		}()
@@ -125,20 +125,21 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			for {
 				key = <-keyPresses
 				if key == 'q' {
-					err = broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					countErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					dialError(countErr, c)
 					turn = countRes.CurrentTurn
 					quit <- true
 				} else if key == 'k' {
-					err = broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(err, c)
+					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+					dialError(worldErr, c)
 					outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 					turn = worldRes.GolBoard.CurrentTurn
 					_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 					quit <- true
 				} else if key == 'p' {
 					pauseRes := stubs.PauseResponse{}
-					err = broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
-					dialError(err, c)
+					pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
+					dialError(pauseErr, c)
 					c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
 					ticker.Stop()
 					paused := true
@@ -146,16 +147,16 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 						key = <-keyPresses
 						if key == 'p' {
 							res := stubs.PauseResponse{}
-							err = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
-							dialError(err, c)
+							pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
+							dialError(pauseErr, c)
 							ticker.Reset(2 * time.Second) // 重新开始ticker计时
 							paused = false
 							c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
 						}
 					}
 				} else if key == 's' {
-					err = broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(err, c)
+					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+					dialError(worldErr, c)
 					go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 				}
 			}
@@ -167,7 +168,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			case board := <-finalTurnFinish:
 				finishFlag = true
 				turn = board.CurrentTurn
-				dialError(err, c)
 				outputPGM(c, p, board.CurrentTurn, board.World)
 				c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
 			case <-quit:
