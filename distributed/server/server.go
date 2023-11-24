@@ -48,10 +48,10 @@ func (s *Server) Init(req stubs.InitRequest, _ *stubs.InitResponse) (err error) 
 	s.threads = req.Threads
 	s.width = req.GolBoard.Width
 	s.height = req.GolBoard.Height
-	s.previousServer, _ = rpc.Dial("tcp", req.PreviousServer.Address+":"+req.PreviousServer.Port)
-	fmt.Println("Connect to previous halo server ", req.PreviousServer.Address+":"+req.PreviousServer.Port)
-	s.nextServer, _ = rpc.Dial("tcp", req.NextServer.Address+":"+req.NextServer.Port)
-	fmt.Println("Connect to next halo server ", req.NextServer.Address+":"+req.NextServer.Port)
+	s.previousServer, _ = rpc.Dial("tcp", req.PreviousServer.PrivateAddress+":"+req.PreviousServer.Port)
+	fmt.Println("Connect to previous halo server ", req.PreviousServer.PrivateAddress+":"+req.PreviousServer.Port)
+	s.nextServer, _ = rpc.Dial("tcp", req.NextServer.PrivateAddress+":"+req.NextServer.Port)
+	fmt.Println("Connect to next halo server ", req.NextServer.PrivateAddress+":"+req.NextServer.Port)
 	return
 }
 
