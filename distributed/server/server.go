@@ -6,21 +6,27 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"sync"
 	"uk.ac.bris.cs/gameoflife/stubs"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
 type Server struct {
-	world          [][]uint8
-	height         int
-	width          int
-	threads        int
-	working        bool
-	quit           chan bool
-	firstLineSent  chan bool
-	lastLineSent   chan bool
-	previousServer *rpc.Client
-	nextServer     *rpc.Client
+	world           [][]uint8
+	flippedCellsMap map[util.Cell]bool
+	height          int
+	width           int
+	threads         int
+	turns           int
+	currentTurn     int
+	working         bool
+	pause           bool
+	quit            chan bool
+	firstLineReady  chan bool
+	lastLineReady   chan bool
+	previousServer  *rpc.Client
+	nextServer      *rpc.Client
+	processLock     sync.Mutex
 }
 
 func handleError(err error) {
@@ -37,41 +43,123 @@ func worldCreate(height int, world [][]uint8, upperHalo, downerHalo []uint8) [][
 	return newWorld
 }
 
-func (s *Server) RunServer(req stubs.RunServerRequest, _ *stubs.RunServerResponse) (err error) {
+func (s *Server) InitServer(req stubs.InitServerRequest, _ *stubs.InitServerResponse) (err error) {
+	if s.pause {
+		s.processLock.Unlock()
+	}
 	if s.working {
 		s.quit <- true
 	}
+	s.processLock.Lock()
+	s.working = false
+	s.currentTurn = req.GolBoard.CurrentTurn
 	s.quit = make(chan bool)
-	s.firstLineSent = make(chan bool)
-	s.lastLineSent = make(chan bool)
+	s.firstLineReady = make(chan bool)
+	s.lastLineReady = make(chan bool)
+	s.flippedCellsMap = make(map[util.Cell]bool)
 	s.world = req.GolBoard.World
 	s.threads = req.Threads
 	s.width = req.GolBoard.Width
 	s.height = req.GolBoard.Height
+	s.turns = req.Turns
 	s.previousServer, _ = rpc.Dial("tcp", req.PreviousServer.Address+":"+req.PreviousServer.Port)
 	fmt.Println("Connect to previous halo server ", req.PreviousServer.Address+":"+req.PreviousServer.Port)
 	s.nextServer, _ = rpc.Dial("tcp", req.NextServer.Address+":"+req.NextServer.Port)
 	fmt.Println("Connect to next halo server ", req.NextServer.Address+":"+req.NextServer.Port)
+	s.processLock.Unlock()
+	return
+}
+
+func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerResponse) (err error) {
+	s.processLock.Lock()
+	turn := s.currentTurn
+	turns := s.turns
+	s.working = true
+	s.processLock.Unlock()
+	for turn < turns {
+		// 获取光环数据
+		upperOut := make(chan []uint8)
+		nextOut := make(chan []uint8)
+		go getHalo(s.previousServer, false, upperOut)
+		go getHalo(s.nextServer, true, nextOut)
+		s.firstLineReady <- true
+		<-s.firstLineReady
+		s.lastLineReady <- true
+		<-s.lastLineReady
+		upperHalo := <-upperOut
+		nextHalo := <-nextOut
+		world := worldCreate(s.height, s.world, upperHalo, nextHalo)
+
+		var outChannels []chan []util.Cell
+		currentHeight := 1
+		averageHeight := s.height / s.threads
+		restHeight := s.height % s.threads
+		size := averageHeight
+		for i := 0; i < s.threads; i++ {
+			size = averageHeight
+			if i < restHeight {
+				// 将除不尽的部分分配到前几个threads中，每个threads一行
+				size += 1
+			}
+			outChannel := make(chan []util.Cell)
+			outChannels = append(outChannels, outChannel)
+			go worker(currentHeight, currentHeight+size, s.width, s.height+2, world, outChannel)
+			currentHeight += size
+		}
+		var flippedCells []util.Cell
+		for i := 0; i < s.threads; i++ {
+			flippedCells = append(flippedCells, <-outChannels[i]...)
+		}
+
+		s.processLock.Lock()
+		for _, flippedCell := range flippedCells {
+			if s.world[flippedCell.Y][flippedCell.X] == 255 {
+				s.world[flippedCell.Y][flippedCell.X] = 0
+			} else {
+				s.world[flippedCell.Y][flippedCell.X] = 255
+			}
+			if s.flippedCellsMap[flippedCell] {
+				delete(s.flippedCellsMap, flippedCell)
+			} else {
+				s.flippedCellsMap[flippedCell] = true
+			}
+		}
+		s.currentTurn++
+		turn++
+		s.processLock.Unlock()
+		select {
+		case <-s.quit:
+			return
+		default:
+			break
+		}
+	}
+	s.processLock.Lock()
+	res.World = s.world
+	s.working = false
+	s.processLock.Unlock()
 	return
 }
 
 func (s *Server) GetFirstLine(_ stubs.LineRequest, res *stubs.LineResponse) (err error) {
+	<-s.firstLineReady
 	line := make([]uint8, len(s.world[0]))
 	for i, value := range s.world[0] {
 		line[i] = value
 	}
 	res.Line = line
-	s.firstLineSent <- true
+	s.firstLineReady <- true
 	return
 }
 
 func (s *Server) GetLastLine(_ stubs.LineRequest, res *stubs.LineResponse) (err error) {
+	<-s.lastLineReady
 	line := make([]uint8, len(s.world[s.height-1]))
 	for i, value := range s.world[s.height-1] {
 		line[i] = value
 	}
 	res.Line = line
-	s.lastLineSent <- true
+	s.lastLineReady <- true
 	return
 }
 
@@ -89,56 +177,29 @@ func getHalo(server *rpc.Client, isFirstLine bool, out chan []uint8) {
 	out <- res.Line
 }
 
-func (s *Server) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) (err error) {
-	s.working = true
-	upperOut := make(chan []uint8)
-	nextOut := make(chan []uint8)
-
-	go getHalo(s.previousServer, false, upperOut)
-	go getHalo(s.nextServer, true, nextOut)
-
-	<-s.firstLineSent
-	<-s.lastLineSent
-
-	upperHalo := <-upperOut
-	nextHalo := <-nextOut
-	world := worldCreate(s.height, s.world, upperHalo, nextHalo)
-
-	var outChannels []chan []util.Cell
-	currentHeight := 1
-	averageHeight := s.height / s.threads
-	restHeight := s.height % s.threads
-	size := averageHeight
-	for i := 0; i < s.threads; i++ {
-		size = averageHeight
-		if i < restHeight {
-			// 将除不尽的部分分配到前几个threads中，每个threads一行
-			size += 1
-		}
-		outChannel := make(chan []util.Cell)
-		outChannels = append(outChannels, outChannel)
-		go worker(currentHeight, currentHeight+size, s.width, s.height+2, world, outChannel)
-		currentHeight += size
-	}
-	var flippedCells []util.Cell
-	for i := 0; i < s.threads; i++ {
-		flippedCells = append(flippedCells, <-outChannels[i]...)
+func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChangeResponse) (err error) {
+	s.processLock.Lock()
+	flippedCells := make([]util.Cell, len(s.flippedCellsMap))
+	i := 0
+	for key := range s.flippedCellsMap {
+		flippedCells[i] = key
 	}
 	res.FlippedCells = flippedCells
-	for _, flippedCell := range flippedCells {
-		if s.world[flippedCell.Y][flippedCell.X] == 255 {
-			s.world[flippedCell.Y][flippedCell.X] = 0
-		} else {
-			s.world[flippedCell.Y][flippedCell.X] = 255
-		}
+	res.CurrentTurn = s.currentTurn
+	s.processLock.Unlock()
+	return
+}
+
+func (s *Server) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
+	if s.pause {
+		s.pause = false
+		res.CurrentTurn = s.currentTurn
+		s.processLock.Unlock()
+	} else {
+		s.processLock.Lock()
+		res.CurrentTurn = s.currentTurn
+		s.pause = true
 	}
-	select {
-	case <-s.quit:
-		break
-	default:
-		break
-	}
-	s.working = false
 	return
 }
 

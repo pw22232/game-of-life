@@ -93,7 +93,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		countFinish := make(chan bool)
 		quit := make(chan bool)
 
-		golBoard := stubs.GolBoard{World: world, Width: p.ImageWidth, Height: p.ImageHeight}
+		golBoard := stubs.GolBoard{World: world, CurrentTurn: 0, Width: p.ImageWidth, Height: p.ImageHeight}
 		req := stubs.RunGolRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
 		var countReq stubs.AliveCellsCountRequest
 		var res stubs.RunGolResponse

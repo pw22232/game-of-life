@@ -41,11 +41,17 @@ type ServerAddress struct {
 	Port    string
 }
 
-type RunServerRequest struct {
+type InitServerRequest struct {
 	GolBoard       GolBoard
 	Threads        int
+	Turns          int
 	PreviousServer ServerAddress
 	NextServer     ServerAddress
+}
+type InitServerResponse struct {
+}
+
+type RunServerRequest struct {
 }
 type RunServerResponse struct {
 	World [][]uint8
@@ -54,8 +60,8 @@ type RunServerResponse struct {
 type WorldChangeRequest struct {
 }
 type WorldChangeResponse struct {
-	CurrentTurn  int
 	FlippedCells []util.Cell
+	CurrentTurn  int
 }
 
 // These will use by keyboard control
