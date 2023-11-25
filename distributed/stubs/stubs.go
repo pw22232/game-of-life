@@ -23,7 +23,8 @@ type RunGolResponse struct {
 type CurrentWorldRequest struct {
 }
 type CurrentWorldResponse struct {
-	GolBoard GolBoard
+	World       [][]uint8
+	CurrentTurn int
 }
 
 type AliveCellsCountRequest struct {
@@ -36,14 +37,24 @@ type AliveCellsCountResponse struct {
 // These will use by broker
 
 type ServerAddress struct {
-	Address        string
-	PrivateAddress string
-	Port           string
+	Address string
+	Port    string
 }
 
-type NextTurnRequest struct {
+type RunServerRequest struct {
+	GolBoard       GolBoard
+	Threads        int
+	PreviousServer ServerAddress
+	NextServer     ServerAddress
 }
-type NextTurnResponse struct {
+type RunServerResponse struct {
+	World [][]uint8
+}
+
+type WorldChangeRequest struct {
+}
+type WorldChangeResponse struct {
+	CurrentTurn  int
 	FlippedCells []util.Cell
 }
 
@@ -61,15 +72,6 @@ type StopResponse struct {
 }
 
 // These will use by halo switch
-
-type InitRequest struct {
-	GolBoard       GolBoard
-	Threads        int
-	PreviousServer ServerAddress
-	NextServer     ServerAddress
-}
-type InitResponse struct {
-}
 
 type LineRequest struct {
 }

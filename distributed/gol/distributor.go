@@ -132,8 +132,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 				} else if key == 'k' {
 					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
 					dialError(worldErr, c)
-					outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
-					turn = worldRes.GolBoard.CurrentTurn
+					outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
+					turn = worldRes.CurrentTurn
 					_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 					quit <- true
 				} else if key == 'p' {
@@ -157,7 +157,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 				} else if key == 's' {
 					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
 					dialError(worldErr, c)
-					go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
+					go outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
 				}
 			}
 		}()
