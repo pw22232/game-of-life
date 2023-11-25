@@ -76,63 +76,67 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 	turns := s.turns
 	s.working = true
 	s.processLock.Unlock()
-	for turn < turns {
-		// 获取光环数据
-		upperOut := make(chan []uint8)
-		nextOut := make(chan []uint8)
-		go getHalo(s.previousServer, false, upperOut)
-		go getHalo(s.nextServer, true, nextOut)
-		s.firstLineReady <- true
-		<-s.firstLineReady
-		s.lastLineReady <- true
-		<-s.lastLineReady
-		upperHalo := <-upperOut
-		nextHalo := <-nextOut
-		world := worldCreate(s.height, s.world, upperHalo, nextHalo)
+	finish := make(chan bool)
+	go func() {
+		for turn < turns {
+			// 获取光环数据
+			upperOut := make(chan []uint8)
+			nextOut := make(chan []uint8)
+			go getHalo(s.previousServer, false, upperOut)
+			go getHalo(s.nextServer, true, nextOut)
+			s.firstLineReady <- true
+			<-s.firstLineReady
+			s.lastLineReady <- true
+			<-s.lastLineReady
+			upperHalo := <-upperOut
+			nextHalo := <-nextOut
+			world := worldCreate(s.height, s.world, upperHalo, nextHalo)
 
-		var outChannels []chan []util.Cell
-		currentHeight := 1
-		averageHeight := s.height / s.threads
-		restHeight := s.height % s.threads
-		size := averageHeight
-		for i := 0; i < s.threads; i++ {
-			size = averageHeight
-			if i < restHeight {
-				// 将除不尽的部分分配到前几个threads中，每个threads一行
-				size += 1
+			var outChannels []chan []util.Cell
+			currentHeight := 1
+			averageHeight := s.height / s.threads
+			restHeight := s.height % s.threads
+			size := averageHeight
+			for i := 0; i < s.threads; i++ {
+				size = averageHeight
+				if i < restHeight {
+					// 将除不尽的部分分配到前几个threads中，每个threads一行
+					size += 1
+				}
+				outChannel := make(chan []util.Cell)
+				outChannels = append(outChannels, outChannel)
+				go worker(currentHeight, currentHeight+size, s.width, s.height+2, world, outChannel)
+				currentHeight += size
 			}
-			outChannel := make(chan []util.Cell)
-			outChannels = append(outChannels, outChannel)
-			go worker(currentHeight, currentHeight+size, s.width, s.height+2, world, outChannel)
-			currentHeight += size
-		}
-		var flippedCells []util.Cell
-		for i := 0; i < s.threads; i++ {
-			flippedCells = append(flippedCells, <-outChannels[i]...)
-		}
+			var flippedCells []util.Cell
+			for i := 0; i < s.threads; i++ {
+				flippedCells = append(flippedCells, <-outChannels[i]...)
+			}
 
-		s.processLock.Lock()
-		for _, flippedCell := range flippedCells {
-			if s.world[flippedCell.Y][flippedCell.X] == 255 {
-				s.world[flippedCell.Y][flippedCell.X] = 0
-			} else {
-				s.world[flippedCell.Y][flippedCell.X] = 255
+			s.processLock.Lock()
+			for _, flippedCell := range flippedCells {
+				if s.world[flippedCell.Y][flippedCell.X] == 255 {
+					s.world[flippedCell.Y][flippedCell.X] = 0
+				} else {
+					s.world[flippedCell.Y][flippedCell.X] = 255
+				}
+				if s.flippedCellsMap[flippedCell] {
+					delete(s.flippedCellsMap, flippedCell)
+				} else {
+					s.flippedCellsMap[flippedCell] = true
+				}
 			}
-			if s.flippedCellsMap[flippedCell] {
-				delete(s.flippedCellsMap, flippedCell)
-			} else {
-				s.flippedCellsMap[flippedCell] = true
-			}
+			s.currentTurn++
+			turn++
+			s.processLock.Unlock()
 		}
-		s.currentTurn++
-		turn++
-		s.processLock.Unlock()
-		select {
-		case <-s.quit:
-			return
-		default:
-			break
-		}
+		finish <- true
+	}()
+	select {
+	case <-s.quit:
+		return
+	case <-finish:
+		break
 	}
 	s.processLock.Lock()
 	res.World = s.world
