@@ -58,10 +58,10 @@ func copyWorld(height, width int, world [][]uint8) [][]uint8 {
 // RunGol distributor divides the work between workers and interacts with other goroutines.
 func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err error) {
 	//结束Broker当前的Gol并开始新的Gol
-	b.processLock.Lock()
 	if b.working {
 		b.quit <- true
 	}
+	b.processLock.Lock()
 	b.quit = make(chan bool)
 	b.working = true
 	// 初始化Broker
@@ -69,18 +69,15 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 	b.worldWidth = req.GolBoard.Width
 	b.worldHeight = req.GolBoard.Height
 	b.world = req.GolBoard.World
-	connectedNode := len(b.serverList)
-	if connectedNode == 0 {
-		b.serverList = make([]Server, 0, Nodes)
-		for i := range NodesList {
-			server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port)
-			if nodeErr == nil {
-				connectedNode += 1
-				b.serverList = append(b.serverList, Server{ServerRpc: server, ServerAddress: NodesList[i]})
-			}
-			if connectedNode == Nodes {
-				break
-			}
+	connectedNode := 0
+	for i := range NodesList {
+		server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port)
+		if nodeErr == nil {
+			connectedNode += 1
+			b.serverList = append(b.serverList, Server{ServerRpc: server, ServerAddress: NodesList[i]})
+		}
+		if connectedNode == Nodes {
+			break
 		}
 	}
 	if connectedNode < 1 {
@@ -107,6 +104,7 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 				Width:       req.GolBoard.Width},
 			Threads:        req.Threads,
 			Turns:          req.Turns,
+			StartY:         currentHeight,
 			PreviousServer: b.serverList[(i-1+connectedNode)%connectedNode].ServerAddress,
 			NextServer:     b.serverList[(i+1+connectedNode)%connectedNode].ServerAddress,
 		}, &stubs.InitServerResponse{})
@@ -177,19 +175,9 @@ func (b *Broker) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.Aliv
 }
 
 func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
-	var outChannels []chan []util.Cell
-
+	var outChannels []chan stubs.WorldChangeResponse
 	for i := range b.serverList {
-		readErr := b.serverList[i].ServerRpc.Call("Server.ReadyToRead", stubs.ReadyToReadRequest{}, &stubs.ReadyToReadResponse{})
-		if readErr != nil {
-			handleError(readErr)
-		}
-		fmt.Println("Ready")
-	}
-	turnChannel := make(chan int)
-	b.processLock.Lock()
-	for i := range b.serverList {
-		outChannel := make(chan []util.Cell)
+		outChannel := make(chan stubs.WorldChangeResponse)
 		outChannels = append(outChannels, outChannel)
 		server := b.serverList[i]
 		go func() {
@@ -199,18 +187,35 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 			if worldErr != nil {
 				handleError(worldErr)
 			}
-			outChannel <- worldRes.FlippedCells
-			turnChannel <- worldRes.CurrentTurn
+			outChannel <- worldRes
 		}()
 	}
-	var flippedCells []util.Cell
-	turn := 0
+	var responses []stubs.WorldChangeResponse
 	for i := range b.serverList {
-		flippedCells = append(flippedCells, <-outChannels[i]...)
-		turn = <-turnChannel
-		fmt.Println(turn)
+		responses = append(responses, <-outChannels[i])
 	}
-
+	turn := responses[0].CurrentTurn
+	for i := range responses {
+		if responses[i].CurrentTurn < turn {
+			turn = responses[i].CurrentTurn
+		}
+	}
+	var flippedCells []util.Cell
+	for i := range responses {
+		for j := 0; j < turn-responses[i].CurrentTurn+3; j++ {
+			for _, flippedCell := range responses[i].FlippedCellsBuffer[j] {
+				if responses[i].FlippedCellsMap[flippedCell] {
+					delete(responses[i].FlippedCellsMap, flippedCell)
+				} else {
+					responses[i].FlippedCellsMap[flippedCell] = true
+				}
+			}
+		}
+		for flippedCell := range responses[i].FlippedCellsMap {
+			flippedCells = append(flippedCells, flippedCell)
+		}
+	}
+	b.processLock.Lock()
 	world := copyWorld(b.worldHeight, b.worldWidth, b.world)
 	b.processLock.Unlock()
 	for _, flippedCell := range flippedCells {
@@ -240,8 +245,6 @@ func (b *Broker) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err erro
 
 func (b *Broker) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	b.quit <- true
-	b.processLock.Lock()
-	fmt.Println("Gol stopped")
 	for _, server := range b.serverList {
 		err = server.ServerRpc.Call("Server.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 	}

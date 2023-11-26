@@ -12,27 +12,28 @@ import (
 )
 
 type Server struct {
-	world           [][]uint8
-	flippedCellsMap map[util.Cell]bool
-	height          int
-	width           int
-	threads         int
-	turns           int
-	currentTurn     int
-	working         bool
-	pause           bool
-	quit            chan bool
-	firstLineReady  chan bool
-	lastLineReady   chan bool
-	getWorld        chan bool
-	previousServer  *rpc.Client
-	nextServer      *rpc.Client
-	processLock     sync.Mutex
+	world              [][]uint8
+	flippedCellsMap    map[util.Cell]bool
+	flippedCellsBuffer chan []util.Cell
+	startY             int
+	height             int
+	width              int
+	threads            int
+	turns              int
+	currentTurn        int
+	working            bool
+	pause              bool
+	quit               chan bool
+	firstLineReady     chan bool
+	lastLineReady      chan bool
+	getWorld           chan bool
+	previousServer     *rpc.Client
+	nextServer         *rpc.Client
+	processLock        sync.Mutex
 }
 
 func handleError(err error) {
 	fmt.Println("Error:", err)
-	os.Exit(1)
 }
 
 // worldCreate 将晕区和世界结合生成一个新的世界
@@ -53,11 +54,16 @@ func (s *Server) InitServer(req stubs.InitServerRequest, _ *stubs.InitServerResp
 	}
 	s.processLock.Lock()
 	s.working = false
+	s.startY = req.StartY
 	s.currentTurn = req.GolBoard.CurrentTurn
 	s.quit = make(chan bool)
 	s.firstLineReady = make(chan bool)
 	s.lastLineReady = make(chan bool)
 	s.getWorld = make(chan bool)
+	s.flippedCellsBuffer = make(chan []util.Cell, 3)
+	s.flippedCellsBuffer <- make([]util.Cell, 0)
+	s.flippedCellsBuffer <- make([]util.Cell, 0)
+	s.flippedCellsBuffer <- make([]util.Cell, 0)
 	s.flippedCellsMap = make(map[util.Cell]bool)
 	s.world = req.GolBoard.World
 	s.threads = req.Threads
@@ -86,17 +92,27 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 			nextOut := make(chan []uint8)
 			go getHalo(s.previousServer, false, upperOut)
 			go getHalo(s.nextServer, true, nextOut)
+			s.firstLineReady <- true
+			s.lastLineReady <- true
 			select {
 			case <-s.getWorld:
-				fmt.Println("Ready to read")
 				s.getWorld <- true
+				fmt.Println("world output")
 			default:
 				break
 			}
-			s.firstLineReady <- true
-			s.lastLineReady <- true
-			<-s.firstLineReady
-			<-s.lastLineReady
+			select {
+			case <-s.firstLineReady:
+				break
+			case <-finish:
+				return
+			}
+			select {
+			case <-s.lastLineReady:
+				break
+			case <-finish:
+				return
+			}
 			upperHalo := <-upperOut
 			nextHalo := <-nextOut
 			world := worldCreate(s.height, s.world, upperHalo, nextHalo)
@@ -129,14 +145,19 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 				} else {
 					s.world[flippedCell.Y][flippedCell.X] = 255
 				}
+			}
+			for _, flippedCell := range <-s.flippedCellsBuffer {
 				if s.flippedCellsMap[flippedCell] {
 					delete(s.flippedCellsMap, flippedCell)
 				} else {
 					s.flippedCellsMap[flippedCell] = true
 				}
 			}
+			for i := range flippedCells {
+				flippedCells[i].Y += s.startY
+			}
+			s.flippedCellsBuffer <- flippedCells
 			s.currentTurn++
-			fmt.Println(s.currentTurn)
 			turn++
 			s.processLock.Unlock()
 		}
@@ -144,6 +165,7 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 	}()
 	select {
 	case <-s.quit:
+		finish <- true
 		return
 	case <-finish:
 		break
@@ -157,22 +179,26 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 
 func (s *Server) GetFirstLine(_ stubs.LineRequest, res *stubs.LineResponse) (err error) {
 	<-s.firstLineReady
+	s.processLock.Lock()
 	line := make([]uint8, len(s.world[0]))
 	for i, value := range s.world[0] {
 		line[i] = value
 	}
 	res.Line = line
+	s.processLock.Unlock()
 	s.firstLineReady <- true
 	return
 }
 
 func (s *Server) GetLastLine(_ stubs.LineRequest, res *stubs.LineResponse) (err error) {
 	<-s.lastLineReady
+	s.processLock.Lock()
 	line := make([]uint8, len(s.world[s.height-1]))
 	for i, value := range s.world[s.height-1] {
 		line[i] = value
 	}
 	res.Line = line
+	s.processLock.Unlock()
 	s.lastLineReady <- true
 	return
 }
@@ -191,19 +217,26 @@ func getHalo(server *rpc.Client, isFirstLine bool, out chan []uint8) {
 	out <- res.Line
 }
 
-func (s *Server) ReadyToRead(_ stubs.WorldChangeRequest, _ *stubs.WorldChangeResponse) (err error) {
-	go func() { s.getWorld <- true }()
-	return
-}
-
 func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChangeResponse) (err error) {
-	flippedCells := make([]util.Cell, len(s.flippedCellsMap))
-	i := 0
-	for key := range s.flippedCellsMap {
-		flippedCells[i] = key
+	s.getWorld <- true
+	flippedCellsMap := make(map[util.Cell]bool)
+	for key, value := range s.flippedCellsMap {
+		flippedCellsMap[key] = value
 	}
-	res.FlippedCells = flippedCells
+	res.FlippedCellsMap = flippedCellsMap
+	flippedCellsBuffer := make([][]util.Cell, 3)
+	for i := 0; i < 3; i++ {
+		temp := <-s.flippedCellsBuffer
+		flippedCells := make([]util.Cell, len(temp))
+		for j := range temp {
+			flippedCells[j] = temp[j]
+		}
+		flippedCellsBuffer = append(flippedCellsBuffer, flippedCells)
+		s.flippedCellsBuffer <- temp
+	}
+	res.FlippedCellsBuffer = flippedCellsBuffer
 	res.CurrentTurn = s.currentTurn
+	fmt.Println("output world", s.currentTurn, len(res.FlippedCellsMap))
 	<-s.getWorld
 	return
 }

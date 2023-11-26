@@ -45,6 +45,7 @@ type InitServerRequest struct {
 	GolBoard       GolBoard
 	Threads        int
 	Turns          int
+	StartY         int
 	PreviousServer ServerAddress
 	NextServer     ServerAddress
 }
@@ -65,8 +66,9 @@ type ReadyToReadResponse struct {
 type WorldChangeRequest struct {
 }
 type WorldChangeResponse struct {
-	FlippedCells []util.Cell
-	CurrentTurn  int
+	FlippedCellsMap    map[util.Cell]bool
+	FlippedCellsBuffer [][]util.Cell
+	CurrentTurn        int
 }
 
 // These will use by keyboard control
