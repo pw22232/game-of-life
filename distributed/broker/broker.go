@@ -178,8 +178,15 @@ func (b *Broker) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.Aliv
 
 func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
 	var outChannels []chan []util.Cell
-	turnChannel := make(chan int)
 
+	for i := range b.serverList {
+		readErr := b.serverList[i].ServerRpc.Call("Server.ReadyToRead", stubs.ReadyToReadRequest{}, &stubs.ReadyToReadResponse{})
+		if readErr != nil {
+			handleError(readErr)
+		}
+		fmt.Println("Ready")
+	}
+	turnChannel := make(chan int)
 	b.processLock.Lock()
 	for i := range b.serverList {
 		outChannel := make(chan []util.Cell)
@@ -187,10 +194,10 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 		server := b.serverList[i]
 		go func() {
 			worldRes := stubs.WorldChangeResponse{}
-			err = server.ServerRpc.Call("Server.GetWorldChange",
-				stubs.WorldChangeRequest{}, &worldRes)
-			if err != nil {
-				handleError(err)
+			worldErr := server.ServerRpc.Call("Server.GetWorldChange",
+				&stubs.WorldChangeRequest{}, &worldRes)
+			if worldErr != nil {
+				handleError(worldErr)
 			}
 			outChannel <- worldRes.FlippedCells
 			turnChannel <- worldRes.CurrentTurn
@@ -221,11 +228,13 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 
 func (b *Broker) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	pauseRes := stubs.PauseResponse{}
-	pauseErr := b.serverList[0].ServerRpc.Call("Server.Pause", stubs.PauseRequest{}, &pauseRes)
-	if pauseErr != nil {
-		handleError(pauseErr)
+	for i := range b.serverList {
+		pauseErr := b.serverList[i].ServerRpc.Call("Server.Pause", stubs.PauseRequest{}, &pauseRes)
+		if pauseErr != nil {
+			handleError(pauseErr)
+		}
+		res.CurrentTurn = pauseRes.CurrentTurn
 	}
-	res.CurrentTurn = pauseRes.CurrentTurn
 	return
 }
 

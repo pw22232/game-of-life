@@ -24,6 +24,7 @@ type Server struct {
 	quit            chan bool
 	firstLineReady  chan bool
 	lastLineReady   chan bool
+	getWorld        chan bool
 	previousServer  *rpc.Client
 	nextServer      *rpc.Client
 	processLock     sync.Mutex
@@ -56,6 +57,7 @@ func (s *Server) InitServer(req stubs.InitServerRequest, _ *stubs.InitServerResp
 	s.quit = make(chan bool)
 	s.firstLineReady = make(chan bool)
 	s.lastLineReady = make(chan bool)
+	s.getWorld = make(chan bool)
 	s.flippedCellsMap = make(map[util.Cell]bool)
 	s.world = req.GolBoard.World
 	s.threads = req.Threads
@@ -84,9 +86,16 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 			nextOut := make(chan []uint8)
 			go getHalo(s.previousServer, false, upperOut)
 			go getHalo(s.nextServer, true, nextOut)
+			select {
+			case <-s.getWorld:
+				fmt.Println("Ready to read")
+				s.getWorld <- true
+			default:
+				break
+			}
 			s.firstLineReady <- true
-			<-s.firstLineReady
 			s.lastLineReady <- true
+			<-s.firstLineReady
 			<-s.lastLineReady
 			upperHalo := <-upperOut
 			nextHalo := <-nextOut
@@ -127,6 +136,7 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 				}
 			}
 			s.currentTurn++
+			fmt.Println(s.currentTurn)
 			turn++
 			s.processLock.Unlock()
 		}
@@ -181,8 +191,12 @@ func getHalo(server *rpc.Client, isFirstLine bool, out chan []uint8) {
 	out <- res.Line
 }
 
+func (s *Server) ReadyToRead(_ stubs.WorldChangeRequest, _ *stubs.WorldChangeResponse) (err error) {
+	go func() { s.getWorld <- true }()
+	return
+}
+
 func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChangeResponse) (err error) {
-	s.processLock.Lock()
 	flippedCells := make([]util.Cell, len(s.flippedCellsMap))
 	i := 0
 	for key := range s.flippedCellsMap {
@@ -190,7 +204,7 @@ func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChan
 	}
 	res.FlippedCells = flippedCells
 	res.CurrentTurn = s.currentTurn
-	s.processLock.Unlock()
+	<-s.getWorld
 	return
 }
 

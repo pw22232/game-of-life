@@ -57,6 +57,11 @@ type RunServerResponse struct {
 	World [][]uint8
 }
 
+type ReadyToReadRequest struct {
+}
+type ReadyToReadResponse struct {
+}
+
 type WorldChangeRequest struct {
 }
 type WorldChangeResponse struct {
@@ -84,11 +89,3 @@ type LineRequest struct {
 type LineResponse struct {
 	Line []uint8
 }
-
-// Use for autorun halo
-
-//type WorldChangeRequest struct {
-//}
-//type WorldChangeResponse struct {
-//	FlippedCells []util.Cell
-//}
