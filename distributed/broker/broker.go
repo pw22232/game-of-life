@@ -202,7 +202,7 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 	}
 	var flippedCells []util.Cell
 	for i := range responses {
-		for j := 0; j < turn-responses[i].CurrentTurn+3; j++ {
+		for j := 0; j < turn-(responses[i].CurrentTurn-3); j++ {
 			for _, flippedCell := range responses[i].FlippedCellsBuffer[j] {
 				if responses[i].FlippedCellsMap[flippedCell] {
 					delete(responses[i].FlippedCellsMap, flippedCell)

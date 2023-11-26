@@ -84,91 +84,76 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 	turns := s.turns
 	s.working = true
 	s.processLock.Unlock()
-	finish := make(chan bool)
-	go func() {
-		for turn < turns {
-			// 获取光环数据
-			upperOut := make(chan []uint8)
-			nextOut := make(chan []uint8)
-			go getHalo(s.previousServer, false, upperOut)
-			go getHalo(s.nextServer, true, nextOut)
-			s.firstLineReady <- true
-			s.lastLineReady <- true
-			select {
-			case <-s.getWorld:
-				s.getWorld <- true
-				fmt.Println("world output")
-			default:
-				break
-			}
-			select {
-			case <-s.firstLineReady:
-				break
-			case <-finish:
-				return
-			}
-			select {
-			case <-s.lastLineReady:
-				break
-			case <-finish:
-				return
-			}
-			upperHalo := <-upperOut
-			nextHalo := <-nextOut
-			world := worldCreate(s.height, s.world, upperHalo, nextHalo)
-
-			var outChannels []chan []util.Cell
-			currentHeight := 1
-			averageHeight := s.height / s.threads
-			restHeight := s.height % s.threads
-			size := averageHeight
-			for i := 0; i < s.threads; i++ {
-				size = averageHeight
-				if i < restHeight {
-					// 将除不尽的部分分配到前几个threads中，每个threads一行
-					size += 1
-				}
-				outChannel := make(chan []util.Cell)
-				outChannels = append(outChannels, outChannel)
-				go worker(currentHeight, currentHeight+size, s.width, s.height+2, world, outChannel)
-				currentHeight += size
-			}
-			var flippedCells []util.Cell
-			for i := 0; i < s.threads; i++ {
-				flippedCells = append(flippedCells, <-outChannels[i]...)
-			}
-
-			s.processLock.Lock()
-			for _, flippedCell := range flippedCells {
-				if s.world[flippedCell.Y][flippedCell.X] == 255 {
-					s.world[flippedCell.Y][flippedCell.X] = 0
-				} else {
-					s.world[flippedCell.Y][flippedCell.X] = 255
-				}
-			}
-			for _, flippedCell := range <-s.flippedCellsBuffer {
-				if s.flippedCellsMap[flippedCell] {
-					delete(s.flippedCellsMap, flippedCell)
-				} else {
-					s.flippedCellsMap[flippedCell] = true
-				}
-			}
-			for i := range flippedCells {
-				flippedCells[i].Y += s.startY
-			}
-			s.flippedCellsBuffer <- flippedCells
-			s.currentTurn++
-			turn++
-			s.processLock.Unlock()
+	for turn < turns {
+		// 获取光环数据
+		upperOut := make(chan []uint8)
+		nextOut := make(chan []uint8)
+		go getHalo(s.previousServer, false, upperOut)
+		go getHalo(s.nextServer, true, nextOut)
+		s.firstLineReady <- true
+		s.lastLineReady <- true
+		select {
+		case <-s.getWorld:
+			s.getWorld <- true
+		default:
+			break
 		}
-		finish <- true
-	}()
-	select {
-	case <-s.quit:
-		finish <- true
-		return
-	case <-finish:
-		break
+		<-s.firstLineReady
+		<-s.lastLineReady
+		upperHalo := <-upperOut
+		nextHalo := <-nextOut
+		world := worldCreate(s.height, s.world, upperHalo, nextHalo)
+
+		var outChannels []chan []util.Cell
+		currentHeight := 1
+		averageHeight := s.height / s.threads
+		restHeight := s.height % s.threads
+		size := averageHeight
+		for i := 0; i < s.threads; i++ {
+			size = averageHeight
+			if i < restHeight {
+				// 将除不尽的部分分配到前几个threads中，每个threads一行
+				size += 1
+			}
+			outChannel := make(chan []util.Cell)
+			outChannels = append(outChannels, outChannel)
+			go worker(currentHeight, currentHeight+size, s.width, s.height+2, world, outChannel)
+			currentHeight += size
+		}
+		var flippedCells []util.Cell
+		for i := 0; i < s.threads; i++ {
+			flippedCells = append(flippedCells, <-outChannels[i]...)
+		}
+
+		s.processLock.Lock()
+		for _, flippedCell := range flippedCells {
+			if s.world[flippedCell.Y][flippedCell.X] == 255 {
+				s.world[flippedCell.Y][flippedCell.X] = 0
+			} else {
+				s.world[flippedCell.Y][flippedCell.X] = 255
+			}
+		}
+		temp := <-s.flippedCellsBuffer
+		for _, flippedCell := range temp {
+			if s.flippedCellsMap[flippedCell] {
+				delete(s.flippedCellsMap, flippedCell)
+			} else {
+				s.flippedCellsMap[flippedCell] = true
+			}
+		}
+		for i := range flippedCells {
+			flippedCells[i].Y += s.startY
+		}
+		s.flippedCellsBuffer <- flippedCells
+		s.currentTurn++
+		turn++
+		s.processLock.Unlock()
+		select {
+		case <-s.quit:
+			return
+		default:
+			break
+		}
 	}
 	s.processLock.Lock()
 	res.World = s.world
@@ -179,6 +164,7 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 
 func (s *Server) GetFirstLine(_ stubs.LineRequest, res *stubs.LineResponse) (err error) {
 	<-s.firstLineReady
+
 	s.processLock.Lock()
 	line := make([]uint8, len(s.world[0]))
 	for i, value := range s.world[0] {
@@ -192,6 +178,7 @@ func (s *Server) GetFirstLine(_ stubs.LineRequest, res *stubs.LineResponse) (err
 
 func (s *Server) GetLastLine(_ stubs.LineRequest, res *stubs.LineResponse) (err error) {
 	<-s.lastLineReady
+
 	s.processLock.Lock()
 	line := make([]uint8, len(s.world[s.height-1]))
 	for i, value := range s.world[s.height-1] {
@@ -224,7 +211,7 @@ func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChan
 		flippedCellsMap[key] = value
 	}
 	res.FlippedCellsMap = flippedCellsMap
-	flippedCellsBuffer := make([][]util.Cell, 3)
+	flippedCellsBuffer := make([][]util.Cell, 0, 3)
 	for i := 0; i < 3; i++ {
 		temp := <-s.flippedCellsBuffer
 		flippedCells := make([]util.Cell, len(temp))
@@ -236,7 +223,6 @@ func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChan
 	}
 	res.FlippedCellsBuffer = flippedCellsBuffer
 	res.CurrentTurn = s.currentTurn
-	fmt.Println("output world", s.currentTurn, len(res.FlippedCellsMap))
 	<-s.getWorld
 	return
 }
