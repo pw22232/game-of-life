@@ -16,8 +16,7 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-// build 接收长度和宽度并生成一个指定长度x宽度的2D矩阵
-// Receives the length and width and generates a 2D matrix of the specified length x width
+// build 返回一个指定长度和宽度的二维矩阵，并初始化为全空值（0）
 func build(height, width int) [][]uint8 {
 	newMatrix := make([][]uint8, height)
 	for i := range newMatrix {
@@ -26,8 +25,7 @@ func build(height, width int) [][]uint8 {
 	return newMatrix
 }
 
-// makeImmutableWorld 将指定的世界转换为函数，转换后只能被读取，不能被修改
-// Converts the specified world to a function, which can only be read after conversion and cannot be modified.
+// makeImmutableWorld 将指定的矩阵转换为函数，函数只能被读取，不能被修改
 func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 	return func(y, x int) uint8 {
 		return world[y][x]
@@ -35,7 +33,6 @@ func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 }
 
 // findAliveCells 返回世界中所有存活的细胞
-// return all alive cells in the world
 func findAliveCells(p Params, immutableWorld func(y, x int) uint8) []util.Cell {
 	var aliveCells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
@@ -172,14 +169,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	// ticker子线程，每两秒报告一次AliveCellsCount
 	//ticker subthread that reports AliveCellsCount every two seconds
 	ticker := time.NewTicker(2 * time.Second)
-	go func() {
-		for {
-			<-ticker.C
-			processLock.Lock()
-			c.events <- AliveCellsCount{CompletedTurns: turn, CellsCount: countAliveCells(p, immutableWorld)}
-			processLock.Unlock()
-		}
-	}()
 
 	// quit线程在键盘按q时提示distributor停止处理回合并退出
 	//quit thread prompts distributor to stop processing back and exit when keyboard presses q
@@ -190,27 +179,32 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	go func() {
 		var key rune
 		for {
-			key = <-keyPresses
-			if key == 'q' {
-				quit <- true
-			} else if key == 'p' {
+			select {
+			case <-ticker.C:
 				processLock.Lock()
-				c.events <- StateChange{CompletedTurns: turn, NewState: Paused}
-				ticker.Stop()
-				paused := true
-				for paused {
-					key = <-keyPresses
-					if key == 'p' {
-						ticker.Reset(2 * time.Second) // 重新开始ticker计时   restart the ticker
-						paused = false
-						c.events <- StateChange{CompletedTurns: turn, NewState: Executing}
-						processLock.Unlock()
-					}
-				}
-			} else if key == 's' {
-				processLock.Lock()
-				go outputPGM(c, p, turn, world)
+				c.events <- AliveCellsCount{CompletedTurns: turn, CellsCount: countAliveCells(p, immutableWorld)}
 				processLock.Unlock()
+			case key = <-keyPresses:
+				if key == 'q' {
+					quit <- true
+				} else if key == 'p' {
+					processLock.Lock()
+					c.events <- StateChange{CompletedTurns: turn, NewState: Paused}
+					paused := true
+					for paused {
+						key = <-keyPresses
+						if key == 'p' {
+							ticker.Reset(2 * time.Second)
+							paused = false
+							c.events <- StateChange{CompletedTurns: turn, NewState: Executing}
+							processLock.Unlock()
+						}
+					}
+				} else if key == 's' {
+					processLock.Lock()
+					go outputPGM(c, p, turn, world)
+					processLock.Unlock()
+				}
 			}
 		}
 	}()
