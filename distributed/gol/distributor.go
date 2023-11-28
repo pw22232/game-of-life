@@ -139,13 +139,15 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		// ticker和按键控制器
 		go func() {
 			var key rune
-			for {
+			var endFlag = false
+			for !endFlag {
 				select {
 				case key = <-keyPresses:
 					if key == 'q' {
 						_ = broker.Call("Broker.CountAliveCells", countReq, &countRes)
 						end <- true  // 先停止broker继续运行
 						quit <- true // 再停止控制器
+						endFlag = true
 					} else if key == 'k' {
 						var worldRes stubs.CurrentWorldResponse
 						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
@@ -153,6 +155,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 						outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 						_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 						quit <- true
+						endFlag = true
 					} else if key == 'p' {
 						pauseRes := stubs.PauseResponse{}
 						pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
