@@ -161,7 +161,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 						pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
 						dialError(pauseErr, c)
 						c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
-						ticker.Stop()
 						paused := true
 						for paused {
 							key = <-keyPresses
