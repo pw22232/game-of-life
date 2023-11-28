@@ -154,6 +154,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 						dialError(worldErr, c)
 						outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 						_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
+						end <- true
 						quit <- true
 						endFlag = true
 					} else if key == 'p' {
