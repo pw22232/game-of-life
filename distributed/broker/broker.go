@@ -17,7 +17,6 @@ var NodesList = [...]stubs.ServerAddress{
 	{Address: "localhost", Port: "8082"},
 	{Address: "localhost", Port: "8083"},
 	{Address: "localhost", Port: "8084"},
-	{Address: "localhost", Port: "8085"},
 }
 
 type Server struct {
@@ -188,13 +187,14 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 
 func (b *Broker) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	if b.paused {
+		res.CurrentTurn = b.currentTurn
 		b.processLock.Unlock()
 		b.paused = false
 	} else {
 		b.processLock.Lock()
 		b.paused = true
+		res.CurrentTurn = b.currentTurn
 	}
-	res.CurrentTurn = b.currentTurn
 	return
 }
 

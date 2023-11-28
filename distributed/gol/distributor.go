@@ -103,14 +103,13 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		var res stubs.RunGolResponse
 		var countRes stubs.AliveCellsCountResponse
 		var worldReq stubs.CurrentWorldRequest
-		var worldRes stubs.CurrentWorldResponse
 		ticker := time.NewTicker(2 * time.Second)
 
 		// 初始化服务器
 		initErr := broker.Call("Broker.RunGol", req, &res)
 		dialError(initErr, c)
 
-		// 调用服务器运行所有的回合
+		// 调用broker运行所有的回合
 		go func() {
 			endFlag := false
 			for turn = 0; turn < p.Turns; turn++ {
@@ -136,53 +135,52 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			dialError(worldErr, c)
 			finalTurnFinish <- endRes.GolBoard
 		}()
-		// 调用服务器每隔两秒返回存活细胞数量
-		go func() {
-			for {
-				<-ticker.C
-				aliveErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
-				dialError(aliveErr, c)
-				countFinish <- true
-			}
-		}()
 
-		// 按键控制器
+		// ticker和按键控制器
 		go func() {
 			var key rune
 			for {
-				key = <-keyPresses
-				if key == 'q' {
-					_ = broker.Call("Broker.CountAliveCells", countReq, &countRes)
-					end <- true
-					quit <- true
-				} else if key == 'k' {
-					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(worldErr, c)
-					outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
-					_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
-					quit <- true
-				} else if key == 'p' {
-					pauseRes := stubs.PauseResponse{}
-					pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
-					dialError(pauseErr, c)
-					c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
-					ticker.Stop()
-					paused := true
-					for paused {
-						key = <-keyPresses
-						if key == 'p' {
-							res := stubs.PauseResponse{}
-							pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
-							dialError(pauseErr, c)
-							ticker.Reset(2 * time.Second) // 重新开始ticker计时
-							paused = false
-							c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
+				select {
+				case key = <-keyPresses:
+					if key == 'q' {
+						_ = broker.Call("Broker.CountAliveCells", countReq, &countRes)
+						end <- true  // 先停止broker继续运行
+						quit <- true // 再停止控制器
+					} else if key == 'k' {
+						var worldRes stubs.CurrentWorldResponse
+						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+						dialError(worldErr, c)
+						outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
+						_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
+						quit <- true
+					} else if key == 'p' {
+						pauseRes := stubs.PauseResponse{}
+						pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
+						dialError(pauseErr, c)
+						c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
+						ticker.Stop()
+						paused := true
+						for paused {
+							key = <-keyPresses
+							if key == 'p' {
+								res := stubs.PauseResponse{}
+								pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
+								dialError(pauseErr, c)
+								ticker.Reset(2 * time.Second) // 重新开始ticker计时
+								paused = false
+								c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
+							}
 						}
+					} else if key == 's' {
+						var worldRes stubs.CurrentWorldResponse
+						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+						dialError(worldErr, c)
+						go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
 					}
-				} else if key == 's' {
-					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(worldErr, c)
-					go outputPGM(c, p, worldRes.GolBoard.CurrentTurn, worldRes.GolBoard.World)
+				case <-ticker.C:
+					aliveErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					dialError(aliveErr, c)
+					countFinish <- true
 				}
 			}
 		}()
