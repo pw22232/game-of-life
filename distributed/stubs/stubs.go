@@ -67,7 +67,7 @@ type WorldChangeRequest struct {
 }
 type WorldChangeResponse struct {
 	FlippedCellsMap    map[util.Cell]bool
-	FlippedCellsBuffer [][]util.Cell
+	FlippedCellsBuffer []util.Cell
 	CurrentTurn        int
 }
 

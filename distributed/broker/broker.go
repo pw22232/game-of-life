@@ -70,19 +70,23 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 	b.worldHeight = req.GolBoard.Height
 	b.world = req.GolBoard.World
 	connectedNode := 0
-	for i := range NodesList {
-		server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port)
-		if nodeErr == nil {
-			connectedNode += 1
-			b.serverList = append(b.serverList, Server{ServerRpc: server, ServerAddress: NodesList[i]})
+	if len(b.serverList) == 0 {
+		for i := range NodesList {
+			server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port)
+			if nodeErr == nil {
+				connectedNode += 1
+				b.serverList = append(b.serverList, Server{ServerRpc: server, ServerAddress: NodesList[i]})
+			}
+			if connectedNode == Nodes {
+				break
+			}
 		}
-		if connectedNode == Nodes {
-			break
+		if connectedNode < 1 {
+			err = errors.New("no node connected")
+			return
 		}
-	}
-	if connectedNode < 1 {
-		err = errors.New("no node connected")
-		return
+	} else {
+		connectedNode = len(b.serverList)
 	}
 
 	// 初始化分布式节点
@@ -149,7 +153,6 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, res *stubs.RunGolResponse) (err
 	return
 }
 
-// CountAliveCells 补充注释
 func (b *Broker) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
 	aliveCellsCount := 0
 	worldRes := stubs.CurrentWorldResponse{}
@@ -202,14 +205,16 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 	}
 	var flippedCells []util.Cell
 	for i := range responses {
-		for j := 0; j < turn-(responses[i].CurrentTurn-3); j++ {
-			for _, flippedCell := range responses[i].FlippedCellsBuffer[j] {
+		if responses[i].CurrentTurn-turn == 0 {
+			for _, flippedCell := range responses[i].FlippedCellsBuffer {
 				if responses[i].FlippedCellsMap[flippedCell] {
 					delete(responses[i].FlippedCellsMap, flippedCell)
 				} else {
 					responses[i].FlippedCellsMap[flippedCell] = true
 				}
 			}
+		} else if responses[i].CurrentTurn-turn > 1 {
+			err = errors.New("server not sync")
 		}
 		for flippedCell := range responses[i].FlippedCellsMap {
 			flippedCells = append(flippedCells, flippedCell)
@@ -233,20 +238,18 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 
 func (b *Broker) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	pauseRes := stubs.PauseResponse{}
-	for i := range b.serverList {
-		pauseErr := b.serverList[i].ServerRpc.Call("Server.Pause", stubs.PauseRequest{}, &pauseRes)
-		if pauseErr != nil {
-			handleError(pauseErr)
-		}
-		res.CurrentTurn = pauseRes.CurrentTurn
+	pauseErr := b.serverList[0].ServerRpc.Call("Server.Pause", stubs.PauseRequest{}, &pauseRes)
+	if pauseErr != nil {
+		handleError(pauseErr)
 	}
+	res.CurrentTurn = pauseRes.CurrentTurn
 	return
 }
 
 func (b *Broker) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	b.quit <- true
 	for _, server := range b.serverList {
-		err = server.ServerRpc.Call("Server.Stop", stubs.StopRequest{}, stubs.StopResponse{})
+		_ = server.ServerRpc.Call("Server.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 	}
 	fmt.Println("Broker stopped")
 	os.Exit(1)

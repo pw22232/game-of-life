@@ -90,16 +90,15 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 
 	if p.Turns > 0 {
 		finalTurnFinish := make(chan stubs.GolBoard)
-		countFinish := make(chan bool)
+		countFinish := make(chan stubs.AliveCellsCountResponse)
 		quit := make(chan bool)
 
 		golBoard := stubs.GolBoard{World: world, CurrentTurn: 0, Width: p.ImageWidth, Height: p.ImageHeight}
 		req := stubs.RunGolRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
 		var countReq stubs.AliveCellsCountRequest
 		var res stubs.RunGolResponse
-		var countRes stubs.AliveCellsCountResponse
+		var aliveRes stubs.AliveCellsCountResponse
 		var worldReq stubs.CurrentWorldRequest
-		var worldRes stubs.CurrentWorldResponse
 		ticker := time.NewTicker(2 * time.Second)
 		// 调用服务器运行所有的回合
 		go func() {
@@ -109,55 +108,52 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			}
 		}()
 
-		// 调用服务器每隔两秒返回存活细胞数量
-		go func() {
-			for {
-				<-ticker.C
-				countErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
-				dialError(countErr, c)
-				countFinish <- true
-			}
-		}()
-
-		// 按键控制器
 		go func() {
 			var key rune
 			for {
-				key = <-keyPresses
-				if key == 'q' {
-					countErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
-					dialError(countErr, c)
-					turn = countRes.CurrentTurn
-					quit <- true
-				} else if key == 'k' {
-					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(worldErr, c)
-					outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
-					turn = worldRes.CurrentTurn
-					_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
-					quit <- true
-				} else if key == 'p' {
-					pauseRes := stubs.PauseResponse{}
-					pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
-					dialError(pauseErr, c)
-					c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
-					ticker.Stop()
-					paused := true
-					for paused {
-						key = <-keyPresses
-						if key == 'p' {
-							res := stubs.PauseResponse{}
-							pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
-							dialError(pauseErr, c)
-							ticker.Reset(2 * time.Second) // 重新开始ticker计时
-							paused = false
-							c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
+				select {
+				case key = <-keyPresses:
+					if key == 'q' {
+						var countRes stubs.AliveCellsCountResponse
+						countErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
+						dialError(countErr, c)
+						turn = countRes.CurrentTurn
+						quit <- true
+					} else if key == 'k' {
+						var worldRes stubs.CurrentWorldResponse
+						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+						dialError(worldErr, c)
+						outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
+						turn = worldRes.CurrentTurn
+						_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
+						quit <- true
+					} else if key == 'p' {
+						pauseRes := stubs.PauseResponse{}
+						pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
+						dialError(pauseErr, c)
+						c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
+						paused := true
+						for paused {
+							key = <-keyPresses
+							if key == 'p' {
+								res := stubs.PauseResponse{}
+								pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
+								dialError(pauseErr, c)
+								ticker.Reset(2 * time.Second) // 重新开始ticker计时
+								paused = false
+								c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
+							}
 						}
+					} else if key == 's' {
+						var worldRes stubs.CurrentWorldResponse
+						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
+						dialError(worldErr, c)
+						go outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
 					}
-				} else if key == 's' {
-					worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
-					dialError(worldErr, c)
-					go outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
+				case <-ticker.C:
+					var countRes stubs.AliveCellsCountResponse
+					_ = broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					countFinish <- countRes
 				}
 			}
 		}()
@@ -166,14 +162,15 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		for {
 			select {
 			case board := <-finalTurnFinish:
+				ticker.Stop()
 				finishFlag = true
 				turn = board.CurrentTurn
 				outputPGM(c, p, board.CurrentTurn, board.World)
 				c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
 			case <-quit:
 				finishFlag = true
-			case <-countFinish:
-				c.events <- AliveCellsCount{CompletedTurns: countRes.CurrentTurn, CellsCount: countRes.Count}
+			case aliveRes = <-countFinish:
+				c.events <- AliveCellsCount{CompletedTurns: aliveRes.CurrentTurn, CellsCount: aliveRes.Count}
 			}
 			if finishFlag {
 				break

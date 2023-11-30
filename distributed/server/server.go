@@ -14,7 +14,7 @@ import (
 type Server struct {
 	world              [][]uint8
 	flippedCellsMap    map[util.Cell]bool
-	flippedCellsBuffer chan []util.Cell
+	flippedCellsBuffer []util.Cell
 	startY             int
 	height             int
 	width              int
@@ -36,7 +36,6 @@ func handleError(err error) {
 	fmt.Println("Error:", err)
 }
 
-// worldCreate 将晕区和世界结合生成一个新的世界
 func worldCreate(height int, world [][]uint8, upperHalo, downerHalo []uint8) [][]uint8 {
 	newWorld := make([][]uint8, 0, height+2)
 	newWorld = append(newWorld, upperHalo)
@@ -60,10 +59,7 @@ func (s *Server) InitServer(req stubs.InitServerRequest, _ *stubs.InitServerResp
 	s.firstLineReady = make(chan bool)
 	s.lastLineReady = make(chan bool)
 	s.getWorld = make(chan bool)
-	s.flippedCellsBuffer = make(chan []util.Cell, 3)
-	s.flippedCellsBuffer <- make([]util.Cell, 0)
-	s.flippedCellsBuffer <- make([]util.Cell, 0)
-	s.flippedCellsBuffer <- make([]util.Cell, 0)
+	s.flippedCellsBuffer = make([]util.Cell, 0)
 	s.flippedCellsMap = make(map[util.Cell]bool)
 	s.world = req.GolBoard.World
 	s.threads = req.Threads
@@ -85,7 +81,6 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 	s.working = true
 	s.processLock.Unlock()
 	for turn < turns {
-		// 获取光环数据
 		upperOut := make(chan []uint8)
 		nextOut := make(chan []uint8)
 		go getHalo(s.previousServer, false, upperOut)
@@ -112,7 +107,6 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 		for i := 0; i < s.threads; i++ {
 			size = averageHeight
 			if i < restHeight {
-				// 将除不尽的部分分配到前几个threads中，每个threads一行
 				size += 1
 			}
 			outChannel := make(chan []util.Cell)
@@ -133,8 +127,7 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 				s.world[flippedCell.Y][flippedCell.X] = 255
 			}
 		}
-		temp := <-s.flippedCellsBuffer
-		for _, flippedCell := range temp {
+		for _, flippedCell := range s.flippedCellsBuffer {
 			if s.flippedCellsMap[flippedCell] {
 				delete(s.flippedCellsMap, flippedCell)
 			} else {
@@ -144,7 +137,7 @@ func (s *Server) RunServer(_ stubs.RunServerRequest, res *stubs.RunServerRespons
 		for i := range flippedCells {
 			flippedCells[i].Y += s.startY
 		}
-		s.flippedCellsBuffer <- flippedCells
+		s.flippedCellsBuffer = flippedCells
 		s.currentTurn++
 		turn++
 		s.processLock.Unlock()
@@ -211,15 +204,9 @@ func (s *Server) GetWorldChange(_ stubs.WorldChangeRequest, res *stubs.WorldChan
 		flippedCellsMap[key] = value
 	}
 	res.FlippedCellsMap = flippedCellsMap
-	flippedCellsBuffer := make([][]util.Cell, 0, 3)
-	for i := 0; i < 3; i++ {
-		temp := <-s.flippedCellsBuffer
-		flippedCells := make([]util.Cell, len(temp))
-		for j := range temp {
-			flippedCells[j] = temp[j]
-		}
-		flippedCellsBuffer = append(flippedCellsBuffer, flippedCells)
-		s.flippedCellsBuffer <- temp
+	flippedCellsBuffer := make([]util.Cell, len(s.flippedCellsBuffer))
+	for j := range flippedCellsBuffer {
+		flippedCellsBuffer[j] = s.flippedCellsBuffer[j]
 	}
 	res.FlippedCellsBuffer = flippedCellsBuffer
 	res.CurrentTurn = s.currentTurn
@@ -246,18 +233,15 @@ func (s *Server) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	return
 }
 
-// calculateNextState 会计算以startY列开始，endY-1列结束的世界的下一步的状态
 func calculateNextState(startY, endY, width, height int, world [][]uint8) []util.Cell {
-	// 计算所有需要改变的细胞
 	var flippedCells []util.Cell
-	// 计算每个点周围的邻居并将状态写入worldNextState
 	neighboursCount := 0
 	for y := startY; y < endY; y++ {
 		for x := 0; x < width; x++ {
 			neighboursCount = countLivingNeighbour(x, y, width, height, world)
-			if world[y][x] == 0 && neighboursCount == 3 { // 死亡的细胞邻居刚好为3个时复活
+			if world[y][x] == 0 && neighboursCount == 3 {
 				flippedCells = append(flippedCells, util.Cell{X: x, Y: y - 1})
-			} else if world[y][x] == 255 && (neighboursCount < 2 || neighboursCount > 3) { // 存活的细胞邻居少于2个或多于3个时死亡
+			} else if world[y][x] == 255 && (neighboursCount < 2 || neighboursCount > 3) {
 				flippedCells = append(flippedCells, util.Cell{X: x, Y: y - 1})
 			}
 		}
@@ -265,17 +249,15 @@ func calculateNextState(startY, endY, width, height int, world [][]uint8) []util
 	return flippedCells
 }
 
-// countLivingNeighbour 通过调用 isAlive 函数判断一个节点有多少存活的邻居，返回存活邻居的数量
 func countLivingNeighbour(x, y, width, height int, world [][]uint8) int {
 	liveNeighbour := 0
-	for line := y - 1; line < y+2; line += 2 { // 判断前一行和后一行
-		for column := x - 1; column < x+2; column++ { // 判断该行3个邻居是否存活
+	for line := y - 1; line < y+2; line += 2 {
+		for column := x - 1; column < x+2; column++ {
 			if isAlive(column, line, width, height, world) {
 				liveNeighbour += 1
 			}
 		}
 	}
-	// 判断左右边的邻居是否存活
 	if isAlive(x-1, y, width, height, world) {
 		liveNeighbour += 1
 	}
@@ -285,7 +267,6 @@ func countLivingNeighbour(x, y, width, height int, world [][]uint8) int {
 	return liveNeighbour
 }
 
-// isAlive 判断一个节点是否存活，支持超出边界的节点判断（上方超界则判断最后一行，左方超界则判断最后一列，以此类推）
 func isAlive(x, y, width, height int, world [][]uint8) bool {
 	x = (x + width) % width
 	y = (y + height) % height
@@ -295,7 +276,6 @@ func isAlive(x, y, width, height int, world [][]uint8) bool {
 	return false
 }
 
-// 将任务分配到每个线程
 func worker(startY, endY, width, height int, world [][]uint8, out chan<- []util.Cell) {
 	out <- calculateNextState(startY, endY, width, height, world)
 }
