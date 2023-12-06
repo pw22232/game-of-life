@@ -26,13 +26,14 @@ func build(height, width int) [][]uint8 {
 }
 
 // makeImmutableWorld 将指定的矩阵转换为函数，函数只能被读取，不能被修改
+// 这是为了实现防御性编程
 func makeImmutableWorld(world [][]uint8) func(y, x int) uint8 {
 	return func(y, x int) uint8 {
 		return world[y][x]
 	}
 }
 
-// findAliveCells 返回世界中所有存活的细胞，用于FinalTurnComplete event
+// findAliveCells 返回世界中所有存活的细胞的坐标（保存为util.Cell类型的数组），用于FinalTurnComplete event
 func findAliveCells(p Params, immutableWorld func(y, x int) uint8) []util.Cell {
 	var aliveCells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
@@ -50,7 +51,7 @@ func countAliveCells(p Params, immutableWorld func(y, x int) uint8) int {
 	aliveCellsCount := 0
 	for x := 0; x < p.ImageWidth; x++ {
 		for y := 0; y < p.ImageHeight; y++ {
-			if immutableWorld(y, x) == 255 {
+			if immutableWorld(y, x) == 255 { // 遍历整个世界，计算存活数量
 				aliveCellsCount++
 			}
 		}
@@ -111,19 +112,20 @@ func isAlive(x, y, width, height int, immutableWorld func(y, x int) uint8) bool 
 
 // outputPGM 将世界输出为pgm图像
 func outputPGM(c distributorChannels, width, height, turn int, world [][]uint8) {
-	c.ioCommand <- ioOutput
+	c.ioCommand <- ioOutput // 设置io为输出模式
+	// 文件名：图像宽度x图像长度x当前回合数
 	outFilename := strconv.Itoa(width) + "x" + strconv.Itoa(height) + "x" + strconv.Itoa(turn)
 	c.ioFilename <- outFilename
-	// 输出世界，ioOutput通道会每次传递一个值，从世界的左上角到右下角
-
+	// 输出世界，ioOutput通道会每次传递一个细胞的值，从世界的左上角到右下角
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			c.ioOutput <- world[y][x]
 		}
 	}
-
+	// 检查是否已经输出完毕
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
+	// 输出完毕后，向events通道传递ImageOutputComplete事件
 	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outFilename}
 }
 
@@ -137,6 +139,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := build(p.ImageHeight, p.ImageWidth)
 
 	currentTurn := 0
+	// 将io切换为输入（读图）模式
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
@@ -164,6 +167,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	isForceQuit := false
 
 	// 用于控制每两秒输出存活细胞数量和处理键盘输入的go线程
+	// 使用func直接创建内嵌函数就可以免去传递参数的麻烦了，但是要特别注意在写入变量时是否会引发race
 	go func() {
 		var key rune // key 代表按下的按键，rune是int32类型的一种别名
 		for {
@@ -179,10 +183,10 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 				} else if key == 'p' { // p按下时暂停程序
 					processLock.Lock() // 锁定互斥锁以暂停下一个回合的处理
 					c.events <- StateChange{CompletedTurns: currentTurn, NewState: Paused}
-					paused := true
+					paused := true // 设置暂停给接下来的for循环使用
 					for paused {
 						key = <-keyPresses
-						if key == 'p' { // 暂停后始终等待p被按下
+						if key == 'p' { // 暂停后一直循环，等待p被按下
 							ticker.Reset(2 * time.Second) // 重置ticker（防止连续触发两次）
 							paused = false
 							c.events <- StateChange{CompletedTurns: currentTurn, NewState: Executing}
@@ -250,7 +254,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		}
 	}
 
-	ticker.Stop()
+	ticker.Stop()                                                 // 退出时停止ticker
 	outputPGM(c, p.ImageWidth, p.ImageHeight, currentTurn, world) // 不论是否是按q退出都要输出一个pgm图像，按q退出时这里输出最后一回合
 	if !isForceQuit {                                             // 如果不是按q退出，就代表要求的回合都执行完了，向events通道发送FinalTurnComplete
 		c.events <- FinalTurnComplete{currentTurn, findAliveCells(p, immutableWorld)}
