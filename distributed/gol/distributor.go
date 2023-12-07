@@ -90,12 +90,13 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		for x := 0; x < p.ImageWidth; x++ {
 			value := <-c.ioInput
 			world[y][x] = value
+			// 存活的细胞要发送给sdl来显示
 			if value == 255 {
 				c.events <- CellFlipped{Cell: util.Cell{X: x, Y: y}}
 			}
 		}
 	}
-	// 如果有要执行的回合
+	// 如果要执行的回合数量大于0
 	if p.Turns > 0 {
 		// finalTurnFinish 通道用于在正常处理完所有回合后收集棋盘的状态，通道内为一整个棋盘
 		finalTurnFinish := make(chan stubs.GolBoard)
