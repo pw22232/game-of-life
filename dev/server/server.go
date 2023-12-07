@@ -280,19 +280,26 @@ func worker(startY, endY, width, height int, world [][]uint8, out chan<- []util.
 	out <- calculateNextState(startY, endY, width, height, world)
 }
 
+// 服务器的主函数
 func main() {
+	// 设置服务器监听指定的端口，flag可以接收用户运行时输入的参数，例如go run . -port 8081
 	portPtr := flag.String("port", "8081", "port to listen on")
 	flag.Parse()
 
+	// 开始监听，address的:前面不加任何东西代表监听所有的位置，对于AWS就是同时监听private和publicIP
 	ln, err := net.Listen("tcp", ":"+*portPtr)
 	if err != nil {
 		handleError(err)
 		return
 	}
+	// 在主程序退出之后停止监听（不过这行代码好像没有什么用）
 	defer func() {
 		_ = ln.Close()
 	}()
+	// 创建一个Server对象，并将它的所有方法都发布（发布订阅模型）
+	// 这样连接到这个server的客户端可以直接调用server对象所有的方法
 	_ = rpc.Register(new(Server))
 	fmt.Println("Server Start, Listening on " + ln.Addr().String())
+	// Accept后所有其他程序就都能连接到这个程序了，Accept会阻塞整个程序直到对应的监听ln.close掉
 	rpc.Accept(ln)
 }

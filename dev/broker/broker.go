@@ -256,20 +256,30 @@ func (b *Broker) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	return
 }
 
+// broker的主函数
 func main() {
+	// 设置broker监听指定的端口，flag可以接收用户运行时输入的参数，例如go run . -port 8080
 	portPtr := flag.String("port", "8080", "port to listen on")
+	// 设置broker最多连接到几台服务器，默认为4台服务器
 	nodePtr := flag.Int("node", 4, "number of node to connect")
 	flag.Parse()
+	// 设置全局变量Nodes
 	Nodes = *nodePtr
+
+	// 开始监听，address的:前面不加任何东西代表监听本机所有的网络
 	ln, err := net.Listen("tcp", ":"+*portPtr)
 	if err != nil {
 		handleError(err)
 		return
 	}
+	// 在主程序退出之后停止监听（不过这行代码没有什么用）
 	defer func() {
 		_ = ln.Close()
 	}()
+	// 创建一个Broker对象，并将它的所有方法都发布（发布订阅模型）
+	// 这样连接到这个broker的客户端可以直接调用broker对象所有的方法
 	_ = rpc.Register(new(Broker))
 	fmt.Println("Broker Start, Listening on " + ln.Addr().String())
+	// Accept后所有其他程序就都能连接到这个程序了，Accept会阻塞整个程序直到对应的监听ln.close掉
 	rpc.Accept(ln)
 }
