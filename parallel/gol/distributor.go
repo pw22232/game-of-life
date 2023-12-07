@@ -167,7 +167,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	isForceQuit := false
 
 	// 用于控制每两秒输出存活细胞数量和处理键盘输入的go线程
-	// 使用func直接创建内嵌函数就可以免去传递参数的麻烦了，但是要特别注意在写入变量时是否会引发race
+	// 使用func直接创建内嵌函数可以免去传递参数的麻烦，但是要特别注意在写入变量时是否会引发race
 	go func() {
 		var key rune // key 代表按下的按键，rune是int32类型的一种别名
 		for {
