@@ -19,13 +19,14 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
+// dialError 处理发生的错误，这里发现错误就直接退出程序
 func dialError(err error, c distributorChannels) {
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println(err) // 输出错误
 		c.ioCommand <- ioCheckIdle
 		<-c.ioIdle
 		c.events <- StateChange{NewState: Quitting}
-		close(c.events)
+		close(c.events) // 这四步用于在退出前等待对文件处理的程序完成操作
 		os.Exit(1)
 	}
 }
@@ -39,7 +40,7 @@ func build(height, width int) [][]uint8 {
 	return newMatrix
 }
 
-// findAliveCells 返回世界中所有存活的细胞
+// findAliveCells 返回世界中所有存活的细胞的坐标（保存为util.Cell类型的数组），用于FinalTurnComplete event
 func findAliveCells(p Params, world [][]uint8) []util.Cell {
 	var aliveCells []util.Cell
 	for x := 0; x < p.ImageWidth; x++ {
@@ -51,35 +52,39 @@ func findAliveCells(p Params, world [][]uint8) []util.Cell {
 	}
 	return aliveCells
 }
+
+// outputPGM 将世界输出为pgm图像
 func outputPGM(c distributorChannels, p Params, turn int, world [][]uint8) {
-	c.ioCommand <- ioOutput
+	c.ioCommand <- ioOutput // 设置io为输出模式
+	// 文件名：图像宽度x图像长度x当前回合数
 	outFilename := strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(turn)
 	c.ioFilename <- outFilename
-	// 输出世界，ioOutput通道会每次传递一个值，从世界的左上角到右下角
-
+	// 输出世界，ioOutput通道会每次传递一个细胞的值，从世界的左上角到右下角
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
 			c.ioOutput <- world[y][x]
 		}
 	}
-
+	// 检查是否已经输出完毕
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
+	// 输出完毕后，向events通道传递ImageOutputComplete事件
 	c.events <- ImageOutputComplete{CompletedTurns: turn, Filename: outFilename}
 }
 
-// distributor divides the work between workers and interacts with other goroutines.
+// distributor 连接到broker并传递当前的世界，之后broker完全自动的处理所有回合
 func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	address := "localhost"
 	port := "8080"
-
+	// broker运行在本地，用localhost作为地址连接
 	broker, err := rpc.Dial("tcp", address+":"+port)
 	dialError(err, c)
-
 	turn := 0
+	// 将io切换为输入（读图）模式
 	c.ioCommand <- ioInput
 	c.ioFilename <- strconv.Itoa(p.ImageHeight) + "x" + strconv.Itoa(p.ImageWidth)
 
+	// 初始化世界，ioInput管道会每次传递一个值，从世界的左上角到右下角
 	world := build(p.ImageHeight, p.ImageWidth)
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
@@ -87,9 +92,11 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			world[y][x] = value
 		}
 	}
-
+	// 如果要执行的回合数量大于0
 	if p.Turns > 0 {
+		// finalTurnFinish 通道用于在正常处理完所有回合后收集棋盘的状态，通道内为一整个棋盘
 		finalTurnFinish := make(chan stubs.GolBoard)
+		// countFinish 通道用于在每两秒输出一次存活细胞数量
 		countFinish := make(chan stubs.AliveCellsCountResponse)
 		quit := make(chan bool)
 
