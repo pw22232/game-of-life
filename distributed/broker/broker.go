@@ -11,7 +11,11 @@ import (
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
+// Nodes 是一个全局变量，代表broker最多连接到几台服务器
+// （其实这里应该写成在broker对象创建时的一个属性，但是当时没想到这个就直接用全局变量了）
 var Nodes int
+
+// NodesList 是一个全局变量，保存了broker能连接的服务器的地址
 var NodesList = [...]stubs.ServerAddress{
 	{Address: "localhost", Port: "8081"},
 	{Address: "localhost", Port: "8082"},
@@ -19,29 +23,33 @@ var NodesList = [...]stubs.ServerAddress{
 	{Address: "localhost", Port: "8084"},
 }
 
+// Server 是一个类型，代表成功连接的一台服务器
 type Server struct {
-	ServerRpc     *rpc.Client
-	ServerAddress stubs.ServerAddress
+	ServerRpc     *rpc.Client         // 保存连接到的服务器的rpc pointer，之后每次调用服务器方法时就不用重新连接了
+	ServerAddress stubs.ServerAddress // 保存连接到的服务器的地址，用于初始化服务器时传递光环交换服务器的地址
 }
 
+// Broker 类型保存Broker所有的属性，Broker作为一个对象（面对对象）
 type Broker struct {
-	world       [][]uint8
-	worldWidth  int
+	world       [][]uint8 // 2D数组，世界
+	worldWidth  int       // 高度，宽度，线程
 	worldHeight int
 	currentTurn int
-	working     bool
-	paused      bool
-	processLock sync.Mutex
-	quit        chan bool
-	serverList  []Server
-	nodes       int
+	working     bool       // broker是否正在运行
+	paused      bool       // broker是否被暂停
+	processLock sync.Mutex // 互斥锁，用于在读写world数据时防止race
+	quit        chan bool  // 用户按k时通知broker关闭的通道
+	serverList  []Server   // 存储了所有已连接的server的数组
+	nodes       int        // nodes是已连接的服务器的数量（等同于len(serverList)，其实不是很必要）
 }
 
+// handleError 在发生错误时输出错误并退出程序
 func handleError(err error) {
 	fmt.Println("Error:", err)
 	os.Exit(1)
 }
 
+// copyWorld 复制一个世界的所有值到一个新的2D数组（防race）
 func copyWorld(height, width int, world [][]uint8) [][]uint8 {
 	newWorld := make([][]uint8, height)
 	for i := range newWorld {
@@ -55,20 +63,21 @@ func copyWorld(height, width int, world [][]uint8) [][]uint8 {
 	return newWorld
 }
 
+// RunGol 初始化broker（已初始化的broker则会重置），并且初始化所有连接到的服务器
 func (b *Broker) RunGol(req stubs.RunGolRequest, _ *stubs.RunGolResponse) (err error) {
-	if b.paused {
+	if b.paused { // 如果broker暂停时被重置，则先解锁互斥锁（其实这里调用自己的暂停方法会更好）
 		b.processLock.Unlock()
 	}
-	if b.working {
-		b.quit <- true
+	if b.working { // 如果broker正在工作
+		b.quit <- true // 向通道传递退出信号
 	}
 	b.quit = make(chan bool)
-	b.working = true
+	b.working = true // 注意：这行代码的位置不对！应该放在底下NextTurn刚开始！现在的位置在极少数情况可能导致race
 	b.currentTurn = 0
 	b.worldWidth = req.GolBoard.Width
 	b.worldHeight = req.GolBoard.Height
 	b.world = req.GolBoard.World
-	if len(b.serverList) == 0 {
+	if len(b.serverList) == 0 { // 如果broker没有连接过服务器则尝试连接，否则直接用原来连接到的
 		b.serverList = make([]Server, 0, Nodes)
 		connectedNode := 0
 		for i := range NodesList {

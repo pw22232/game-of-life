@@ -10,7 +10,7 @@ import (
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
-// Server 是服务器所有的属性，服务器作为一个对象（面对对象编程）
+// Server 类型保存服务器所有的属性，服务器作为一个对象（面对对象）
 type Server struct {
 	world          [][]uint8 // 2D数组，世界
 	height         int       // 高度，宽度，线程
