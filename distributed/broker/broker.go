@@ -80,19 +80,20 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, _ *stubs.RunGolResponse) (err e
 	if len(b.serverList) == 0 { // 如果broker没有连接过服务器则尝试连接，否则直接用原来连接到的
 		b.serverList = make([]Server, 0, Nodes)
 		connectedNode := 0
-		for i := range NodesList {
-			server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port)
+		for i := range NodesList { // 从全局变量里获取服务器地址
+			server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port) // 尝试连接服务器
+			// 如果没有发生错误则代表连接成功，连接数量+1，将服务器的pointer和地址放进serverList
 			if nodeErr == nil {
 				connectedNode += 1
 				b.serverList = append(b.serverList, Server{ServerRpc: server, ServerAddress: NodesList[i]})
 			}
-			if connectedNode == Nodes {
+			if connectedNode == Nodes { // 如果连接的服务器数量已经达到上限则停止循环
 				break
 			}
 		}
 		b.nodes = connectedNode
 	}
-
+	// 分割棋盘并初始化服务器，分割逻辑和parallel一致
 	averageHeight := req.GolBoard.Height / b.nodes
 	restHeight := req.GolBoard.Height % b.nodes
 	size := averageHeight
@@ -102,6 +103,8 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, _ *stubs.RunGolResponse) (err e
 		if i < restHeight {
 			size += 1
 		}
+		// 这里调用服务器的初始化方法，传递一个分割过的棋盘（含服务器要处理的那部分世界的数据和高度宽度）
+		// 同时传递使用线程的数量和前后两台用于光环交换的服务器的地址
 		err = server.ServerRpc.Call("Server.Init", stubs.InitRequest{
 			GolBoard: stubs.GolBoard{
 				World:  req.GolBoard.World[currentHeight : currentHeight+size],
@@ -119,13 +122,19 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, _ *stubs.RunGolResponse) (err e
 	return
 }
 
+// NextTurn 调用所有服务器计算下个回合，收集结果后返回
 func (b *Broker) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) (err error) {
 	currentHeight := 0
+	// 读取属性里的内容时锁定互斥锁
 	b.processLock.Lock()
+	// 这里应该先b.working = true设置broker现在在工作，这是一个失误
 	averageHeight := b.worldHeight / b.nodes
 	restHeight := b.worldHeight % b.nodes
+	// 创建一个世界的复制，之后就不使用属性里的值了，减少互斥锁锁定时间，提高效率
 	world := copyWorld(b.worldWidth, b.worldHeight, b.world)
 	b.processLock.Unlock()
+	// 调用每个服务器计算下回合并收集结果，这里还有每次计算height是一个失误
+	// 应该在初始化服务器的时候直接把每个服务器的y轴开始的值保存起来，这样就不用一直重新算了
 	size := averageHeight
 	var outChannels []chan []util.Cell
 	for i := 0; i < b.nodes; i++ {
@@ -135,13 +144,16 @@ func (b *Broker) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) 
 		}
 		outChannel := make(chan []util.Cell)
 		outChannels = append(outChannels, outChannel)
+		// 因为serverList初始化之后就不会再更改了，因此这里无需锁定互斥锁
 		go callNextTurn(b.serverList[i].ServerRpc, currentHeight, outChannel)
 		currentHeight += size
 	}
+	// 收集结果
 	var flippedCells []util.Cell
 	for i := 0; i < b.nodes; i++ {
 		flippedCells = append(flippedCells, <-outChannels[i]...)
 	}
+	// 应用到复制的世界上
 	for _, flippedCell := range flippedCells {
 		if world[flippedCell.Y][flippedCell.X] == 255 {
 			world[flippedCell.Y][flippedCell.X] = 0
@@ -149,24 +161,30 @@ func (b *Broker) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) 
 			world[flippedCell.Y][flippedCell.X] = 255
 		}
 	}
+	// 这里要修改世界属性了，锁定互斥锁
 	b.processLock.Lock()
-	b.world = world
+	b.world = world // 把这回合完成后的新世界放进世界属性里
 	b.currentTurn = b.currentTurn + 1
 	b.processLock.Unlock()
-
+	// 如果broker当前准备重新初始化了，这里就会直接解除阻塞，这样broker就可以重置了
 	select {
 	case <-b.quit:
 		break
 	default:
 		break
 	}
+	// 由于working的值没有设置为true过所以这一行没有用处，还有可能导致race
 	b.working = false
+	// 返回这一回合发生改变的细胞
 	res.FlippedCells = flippedCells
 	return
 }
 
+// CountAliveCells 根据当前world属性里的数据，返回存活细胞的数量和当前回合数
 func (b *Broker) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
+	// 计算逻辑几乎和parallel的一致
 	aliveCellsCount := 0
+	// 因为这里要读取世界数据，必须锁定互斥锁
 	b.processLock.Lock()
 	for x := 0; x < b.worldWidth; x++ {
 		for y := 0; y < b.worldHeight; y++ {
@@ -175,12 +193,14 @@ func (b *Broker) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.Aliv
 			}
 		}
 	}
+	// 返回当前的回合和存活细胞数量
 	res.Count = aliveCellsCount
 	res.CurrentTurn = b.currentTurn
 	b.processLock.Unlock()
 	return
 }
 
+// GetWorld 会直接返回当前broker的棋盘状态（其实应该改成只返回世界和当前回合数）
 func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldResponse) (err error) {
 	b.processLock.Lock()
 	res.GolBoard = stubs.GolBoard{World: b.world, CurrentTurn: b.currentTurn, Width: b.worldWidth, Height: b.worldHeight}
@@ -188,19 +208,21 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 	return
 }
 
+// Pause 在broker运行时暂停当前broker，如果已经暂停就继续broker运行（使用互斥锁）
 func (b *Broker) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	if b.paused {
-		res.CurrentTurn = b.currentTurn
+		res.CurrentTurn = b.currentTurn // 如果已经暂停就先获取当前回合再解锁互斥锁（防race）
 		b.processLock.Unlock()
-		b.paused = false
+		b.paused = false // 取消暂停属性的状态
 	} else {
 		b.processLock.Lock()
-		b.paused = true
-		res.CurrentTurn = b.currentTurn
+		b.paused = true                 // 设置暂停属性的状态
+		res.CurrentTurn = b.currentTurn // 先锁定互斥锁再读取当前回合
 	}
 	return
 }
 
+// Stop 会暂停broker，通知所有服务器关闭，然后关闭broker
 func (b *Broker) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	b.quit <- true
 	b.processLock.Lock()
@@ -213,8 +235,10 @@ func (b *Broker) Stop(_ stubs.StopRequest, _ *stubs.StopResponse) (err error) {
 	return
 }
 
+// callNextTurn 调用服务器计算下回合细胞变化，并将y轴坐标增加以匹配y轴开始的值，并将结果传进给定的通道内
 func callNextTurn(server *rpc.Client, startY int, out chan<- []util.Cell) {
 	res := stubs.NextTurnResponse{}
+	//
 	err := server.Call("Server.NextTurn", stubs.NextTurnRequest{}, &res)
 	if err != nil {
 		handleError(err)
