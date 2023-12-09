@@ -78,7 +78,7 @@ func (b *Broker) RunGol(req stubs.RunGolRequest, _ *stubs.RunGolResponse) (err e
 	b.worldHeight = req.GolBoard.Height
 	b.world = req.GolBoard.World
 	if len(b.serverList) == 0 { // 如果broker没有连接过服务器则尝试连接，否则直接用原来连接到的
-		b.serverList = make([]Server, 0, Nodes)
+		b.serverList = make([]Server, 0, Nodes) // 创建一个长度为0的数组，但是分配Nodes个Server的内存空间（可以节省一丢丢性能）
 		connectedNode := 0
 		for i := range NodesList { // 从全局变量里获取服务器地址
 			server, nodeErr := rpc.Dial("tcp", NodesList[i].Address+":"+NodesList[i].Port) // 尝试连接服务器
@@ -182,7 +182,7 @@ func (b *Broker) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) 
 
 // CountAliveCells 根据当前world属性里的数据，返回存活细胞的数量和当前回合数
 func (b *Broker) CountAliveCells(_ stubs.AliveCellsCountRequest, res *stubs.AliveCellsCountResponse) (err error) {
-	// 计算逻辑几乎和parallel的一致
+	// 计算逻辑和parallel的一致
 	aliveCellsCount := 0
 	// 因为这里要读取世界数据，必须锁定互斥锁
 	b.processLock.Lock()
