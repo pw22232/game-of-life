@@ -191,7 +191,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 						quit <- true
 						endFlag = true
 					} else if key == 'p' { // 当用户按下p键时，暂停处理下回合和其他事件
-						// 暂停时调用broker的pause方法来暂停broker处理下回合，同时broker会返回在哪个回合被暂停了
+						// 调用broker的pause方法来暂停broker处理下回合，同时broker会返回在哪个回合被暂停了
 						pauseRes := stubs.PauseResponse{}
 						pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
 						dialError(pauseErr, c)

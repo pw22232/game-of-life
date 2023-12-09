@@ -98,92 +98,116 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		finalTurnFinish := make(chan stubs.GolBoard)
 		// countFinish 通道用于在每两秒输出一次存活细胞数量
 		countFinish := make(chan stubs.AliveCellsCountResponse)
+		// Stop 会暂停broker，通知所有服务器关闭，然后关闭broker
 		quit := make(chan bool)
 
+		// 初始化一些request供其他线程使用，其实这里不应该初始化任何response，因为有可能导致race
+		// 但这里还留着的response都是我检查过不会race了所以留着以供其他线程使用的。
 		golBoard := stubs.GolBoard{World: world, CurrentTurn: 0, Width: p.ImageWidth, Height: p.ImageHeight}
 		req := stubs.RunGolRequest{GolBoard: golBoard, Turns: p.Turns, Threads: p.Threads}
 		var countReq stubs.AliveCellsCountRequest
 		var res stubs.RunGolResponse
 		var aliveRes stubs.AliveCellsCountResponse
 		var worldReq stubs.CurrentWorldRequest
+		// 创建一个的ticker，每两秒会向ticker.C通道传值
 		ticker := time.NewTicker(2 * time.Second)
-		// 调用服务器运行所有的回合
+		// 调用broker的RunGol开始运行所有的回合
 		go func() {
 			runErr := broker.Call("Broker.RunGol", req, &res)
+			// 如果所有回合都执行完毕，会返回最终的棋盘，将其传进finalTurnFinish通道，代表处理完成
 			if runErr == nil {
 				finalTurnFinish <- res.GolBoard
 			}
 		}()
 
+		// 用于控制每两秒输出存活细胞数量和处理键盘输入的go线程
+		// 使用func直接创建内嵌函数可以免去传递参数的麻烦，但是要特别注意在写入变量时是否会引发race
 		go func() {
+			// 按下的按键会被存储为rune类型
 			var key rune
 			for {
 				select {
-				case key = <-keyPresses:
-					if key == 'q' {
+				case key = <-keyPresses: // 情况1：用户按下了按键
+					if key == 'q' { // 当用户按下q键时，退出本程序但不退出broker和server
 						var countRes stubs.AliveCellsCountResponse
+						// 调用Broker的CountAliveCells获取当前在执行的回合数来在退出时显示
+						// CountAliveCells其实挺慢的，但是反正退出只会退出一次，应该无所谓啦（最好是单独一个函数返回当前回合数）
 						countErr := broker.Call("Broker.CountAliveCells", countReq, &countRes)
 						dialError(countErr, c)
 						turn = countRes.CurrentTurn
 						quit <- true
-					} else if key == 'k' {
+					} else if key == 'k' { // 当用户按下k键时，退出本程序、broker和server
+						// 退出之前调用broker获取当前的世界并输出图像
 						var worldRes stubs.CurrentWorldResponse
 						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
 						dialError(worldErr, c)
 						outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
 						turn = worldRes.CurrentTurn
+						// 调用broker的stop方法，broker会在通知服务器关闭后停止
 						_ = broker.Call("Broker.Stop", stubs.StopRequest{}, stubs.StopResponse{})
 						quit <- true
-					} else if key == 'p' {
+					} else if key == 'p' { // 当用户按下p键时，暂停处理下回合和其他事件
+						// 调用broker的pause方法来暂停服务器，同时broker会返回在哪个回合被暂停了
 						pauseRes := stubs.PauseResponse{}
 						pauseErr := broker.Call("Broker.Pause", stubs.PauseRequest{}, &pauseRes)
 						dialError(pauseErr, c)
+						// 向event通道发送StateChange事件表示已暂停
 						c.events <- StateChange{CompletedTurns: pauseRes.CurrentTurn, NewState: Paused}
-						paused := true
+						paused := true // 用于下面的for循环
 						for paused {
 							key = <-keyPresses
-							if key == 'p' {
+							if key == 'p' { // 当用户再次按下p键时，继续运行
+								// 再次调用broker的pause方法会让broker继续处理下回合
+								// 这里的名字忘改了，应该是pauseRes
 								res := stubs.PauseResponse{}
 								pauseErr = broker.Call("Broker.Pause", stubs.PauseRequest{}, &res)
 								dialError(pauseErr, c)
-								ticker.Reset(2 * time.Second) // 重新开始ticker计时
-								paused = false
+								ticker.Reset(2 * time.Second) // 重置ticker来防止连续触发两次
+								paused = false                // 结束for循环
+								// 向event通道发送StateChange事件表示继续运行
 								c.events <- StateChange{CompletedTurns: res.CurrentTurn, NewState: Executing}
 							}
 						}
-					} else if key == 's' {
+					} else if key == 's' { // 当用户按下s键时，输出当前回合的世界的图像
+						// 调用broker返回当前世界
 						var worldRes stubs.CurrentWorldResponse
 						worldErr := broker.Call("Broker.GetWorld", worldReq, &worldRes)
 						dialError(worldErr, c)
+						// 在子线程内输出图像，防止卡顿，由于worldRes在上面每次重新创建，因此不会发生race
 						go outputPGM(c, p, worldRes.CurrentTurn, worldRes.World)
 					}
-				case <-ticker.C:
+				case <-ticker.C: // 情况2，ticker到两秒了
+					// 调用Broker返回当前回合和世界内存活的细胞数量
 					var countRes stubs.AliveCellsCountResponse
 					_ = broker.Call("Broker.CountAliveCells", countReq, &countRes)
+					// 这里向通道传countRes内的值，就不会race了
 					countFinish <- countRes
 				}
 			}
 		}()
 
-		finishFlag := false
+		finishFlag := false // finishFlag为true时退出主程序
 		for {
 			select {
-			case board := <-finalTurnFinish:
+			case board := <-finalTurnFinish: // 如果finalTurnFinish通道传入，则代表正常执行完了所有回合
 				ticker.Stop()
 				finishFlag = true
-				turn = board.CurrentTurn
-				outputPGM(c, p, board.CurrentTurn, board.World)
+				turn = board.CurrentTurn                        // 这里就是有用的了，因为distributor不知道运行到第几回合
+				outputPGM(c, p, board.CurrentTurn, board.World) // 最终回合完成后输出图像
 				c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
 			case <-quit:
+				// 这里应该停止ticker以解决下面的一个问题
 				finishFlag = true
 			case aliveRes = <-countFinish:
+				// 这里在获取存活细胞数量完成后向event传输值，原本应该放在上面的子线程里
+				// 至于放在这里的原因是我忘记在用户输入退出后停止ticker，放在这里避免ticker继续工作
 				c.events <- AliveCellsCount{CompletedTurns: aliveRes.CurrentTurn, CellsCount: aliveRes.Count}
 			}
 			if finishFlag {
 				break
 			}
 		}
-	} else {
+	} else { // 如果回合数为0则不需要连接broker处理数据，直接输出图像退出即可
 		board := stubs.GolBoard{World: world, CurrentTurn: 0, Width: p.ImageWidth, Height: p.ImageHeight}
 		outputPGM(c, p, board.CurrentTurn, board.World)
 		c.events <- FinalTurnComplete{board.CurrentTurn, findAliveCells(p, board.World)}
