@@ -71,7 +71,7 @@ func (s *Server) GetFirstLine(_ stubs.LineRequest, res *stubs.LineResponse) (err
 		line[i] = value // 将世界第一行每个值复制进新的数组（这样即使世界被修改光环也肯定不会变）
 	}
 	res.Line = line
-	s.firstLineSent <- true // 准备完成后向通道传递值，这样保证所有服务器都完成光环交换后再继续运行下回合
+	s.firstLineSent <- true // 在交换前向通道传递值，这样保证所有服务器都完成光环交换后再继续运行下回合
 	return
 }
 
@@ -117,7 +117,7 @@ func (s *Server) NextTurn(_ stubs.NextTurnRequest, res *stubs.NextTurnResponse) 
 	upperHalo := <-upperOut
 	nextHalo := <-nextOut
 	// 用获取的数据来创建一个新的世界，新世界上下两行是光环，中间是要计算下回合的部分
-	// 这样做的好处就是可以用和parallel完全相同的逻辑来计算，唯一不同的是只计算中间的部分（第2行到倒数第二行）
+	// 这样做的好处就是可以用和parallel完全相同的逻辑来计算，唯一不同的是只计算中间的部分（第二行到倒数第二行）
 	world := worldCreate(s.height, s.world, upperHalo, nextHalo)
 	// 开始多线程处理
 	// 这个列表保存了所有worker输出数据的通道

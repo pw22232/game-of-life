@@ -280,10 +280,11 @@ func (b *Broker) GetWorld(_ stubs.CurrentWorldRequest, res *stubs.CurrentWorldRe
 	return
 }
 
-// Pause 只调用服务器的暂停方法，因为broker不负责任何计算所以不需要暂停
+// Pause 只调用一台服务器的暂停方法，因为broker不负责任何计算所以不需要暂停
 func (b *Broker) Pause(_ stubs.PauseRequest, res *stubs.PauseResponse) (err error) {
 	pauseRes := stubs.PauseResponse{}
 	pauseErr := b.serverList[0].ServerRpc.Call("Server.Pause", stubs.PauseRequest{}, &pauseRes)
+	// 这里只暂停了一台服务器，因为自动光环会等待其他服务器，所以暂停一台之后所有服务器都暂停了
 	if pauseErr != nil {
 		handleError(pauseErr)
 	}
