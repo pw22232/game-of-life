@@ -17,9 +17,15 @@ The "game" is a zero-player game, meaning that its evolution is determined by it
 We Implement the logic to visualise the state of the game using SDL.  
 Also, the following are control rules. Note that the goroutine running SDL provides us with a channel containing the relevant keypresses.
 
-If s is pressed, generate a PGM file with the current state of the board.
-If q is pressed, generate a PGM file with the current state of the board and then terminate the program. Your program should not continue to execute all turns set in gol.Params.Turns.
-If p is pressed, pause the processing and print the current turn that is being processed. If p is pressed again resume the processing and print "Continuing". It is not necessary for q and s to work while the execution is paused.
+If `s` is pressed, generate a PGM file with the current state of the board.
+If `q` is pressed, generate a PGM file with the current state of the board and then terminate the program. Your program should not continue to execute all turns set in gol.Params.Turns.
+If `p` is pressed, pause the processing and print the current turn that is being processed. If p is pressed again resume the processing and print "Continuing". It is not necessary for q and s to work while the execution is paused.
 
-Test the visualisation and control rules by running go run .
+Test the visualisation and control rules by running `go run .`
+![parallel structure](docs/parallel.png)
+(The diagram shows parallel part's structure)
+
+### Part2. Distributed
+
+
 
