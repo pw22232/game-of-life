@@ -40,8 +40,3 @@ Test the control rules by running `go run .`
 
 ![distributed structure](docs/DistributedStructure.png)
 (The diagram shows parallel part's structure)
-
-
-
-
-
