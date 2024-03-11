@@ -23,7 +23,7 @@ If `q` is pressed, generate a PGM file with the current state of the board and t
 If `p` is pressed, pause the processing and print the current turn that is being processed. If p is pressed again resume the processing and print "Continuing". It is not necessary for q and s to work while the execution is paused.
 
 Test the visualisation and control rules by running `go run .`
-![parallel structure](docs/parallel.png)
+![parallel structure](docs/ParallelStructure.png)
 (The diagram shows parallel part's structure)
 
 ### Part2. Distributed
@@ -38,7 +38,10 @@ If `k` is pressed, all components of the distributed system are shut down cleanl
 If `p` is pressed, pause the processing on the AWS node and have the controller print the current turn that is being processed. If `p` is pressed again resume the processing and have the controller print "Continuing". It is not necessary for q and s to work while the execution is paused.
 Test the control rules by running `go run .`
 
-![distributed structure](docs/distributed.png)
+![distributed structure](docs/DistributedStructure.png)
 (The diagram shows parallel part's structure)
+
+
+
 
 
