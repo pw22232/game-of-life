@@ -11,7 +11,14 @@ The "game" is a zero-player game, meaning that its evolution is determined by it
 3.Any live cell with more than three live neighbours dies, as if by over-population.
 
 4.Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
-
+  
+### Setup and Running
+   
+- Clone the git repository using the command `git clone https://github.com/pw22232/game-of-life.git`
+- Open the project Goland
+- go to the coressponding folder
+- Then type `go run .`
+- Contact pw22232@bristol.ac.uk for further instruction 
 
 ### Part1. Parallel
 
@@ -24,7 +31,11 @@ If `p` is pressed, pause the processing and print the current turn that is being
 
 Test the visualisation and control rules by running `go run .`
 ![parallel structure](docs/ParallelStructure.png)
-(The diagram shows parallel part's structure)
+  
+  (The diagram shows parallel part's structure)
+
+
+  
 
 ### Part2. Distributed
 
@@ -39,4 +50,4 @@ If `p` is pressed, pause the processing on the AWS node and have the controller 
 Test the control rules by running `go run .`
 
 ![distributed structure](docs/DistributedStructure.png)
-(The diagram shows parallel part's structure)
+(The diagram shows distributed part's structure)
