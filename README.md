@@ -12,6 +12,7 @@ The "game" is a zero-player game, meaning that its evolution is determined by it
 
 4.Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
 
+
 ### Part1. Parallel
 
 We Implement the logic to visualise the state of the game using SDL.  
@@ -27,5 +28,17 @@ Test the visualisation and control rules by running `go run .`
 
 ### Part2. Distributed
 
+In this stage, we create an implementation that uses a number of AWS nodes to cooperatively calculate the new state of the Game of Life board, and communicate state between machines over a network. 
+
+the local controller is able to manage the behaviour of the GoL engine according to the following rules:
+
+If `s` is pressed, the controller should generate a PGM file with the current state of the board.
+If `q` is pressed, close the controller client program without causing an error on the GoL server. A new controller should be able to take over interaction with the GoL engine. Note that you are free to define the nature of how a new controller can take over interaction. Most likely the state will be reset. If you do manage to continue with the previous world this would be considered an extension and a form of fault tolerance.
+If `k` is pressed, all components of the distributed system are shut down cleanly, and the system outputs a PGM image of the latest state.
+If `p` is pressed, pause the processing on the AWS node and have the controller print the current turn that is being processed. If `p` is pressed again resume the processing and have the controller print "Continuing". It is not necessary for q and s to work while the execution is paused.
+Test the control rules by running `go run .`
+
+![distributed structure](docs/distributed.png)
+(The diagram shows parallel part's structure)
 
 
