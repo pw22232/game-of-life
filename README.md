@@ -11,6 +11,8 @@ The "game" is a zero-player game, meaning that its evolution is determined by it
 3.Any live cell with more than three live neighbours dies, as if by over-population.
 
 4.Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
+
+[For a more detailed explanation and analysis of the data click here](report.pdf)
   
 ### Setup and Running
    
